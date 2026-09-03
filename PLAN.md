@@ -22,6 +22,33 @@ This document is self-contained: an agent can continue from it without reading t
 
 ---
 
+## 0. Published on GitHub
+
+- Repo: <https://github.com/ScannerVpn/FullRGB> (public, MIT + GPL-2.0 notice for the bundled engine)
+- Release: <https://github.com/ScannerVpn/FullRGB/releases/tag/v1.0.0> — `FullRGB.exe` 83.2 MB
+  + `FullRGB.exe.sha256`
+- CI: `.github/workflows/windows-build.yml` builds on `windows-latest`, runs `--rendertest` +
+  `--uitest`, asserts the published exe is ≥78 MB (proves `engine.zip` is embedded — a build with
+  the resource missing still succeeds and lands ~70 MB), uploads an artifact, and on
+  `workflow_dispatch` with `tag=vX.Y.Z` creates/fills the release and un-drafts it.
+
+**Never upload release assets from this machine.** A local `gh release upload` of the 84 MB exe
+died with `wsarecv: An existing connection was forcibly closed` after 14 minutes and left the
+release a draft with zero assets. Publish with:
+
+```bash
+cd "G:/Ai/RGB Control" && gh workflow run windows-build.yml -f tag=vX.Y.Z
+cd "G:/Ai/RGB Control" && gh run watch <id> --exit-status
+```
+
+`--uitest` on a runner: two assertions describe the MACHINE, not the code, and are SKIPped when
+`CI=true` — the runner's shell is elevated (so "not elevated when started normally" is false) and
+its VM has no USB tree (so `usbscan` and the offline-unknown classification have nothing to
+classify). Both still run and pass on this desktop. Simulate a runner locally with
+`$env:CI='true'` before `--uitest`.
+
+---
+
 ## 1. What this app is
 
 Windows desktop app (WPF, .NET 8, single-file self-contained EXE) that finds every RGB device
