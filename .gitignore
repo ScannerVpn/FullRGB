@@ -1,0 +1,49 @@
+# Build outputs
+bin/
+obj/
+dist*/
+publish/
+*.user
+*.suo
+.vs/
+_ReSharper*/
+*.DotSettings.user
+
+# Dist publish outputs (single-file exe)
+dist/
+dist5/
+dist6/
+dist7/
+dist8/
+dist9/
+dist10/
+dist11/
+dist12/
+binReleasenet8.0-windowswin-x64publish2 --nologo/
+
+# Logs & temp
+*.log
+*.tmp
+Temp/
+fullrgb-shots/
+__pycache__/
+_probe/__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# User settings (keep example, ignore local)
+# settings.json is per-user, not repo
+AppData/
+
+# IDE
+.idea/
+*.swp
+*~
+
+# Keep vendor but ignore its build temp if any
+vendor/OpenRGB/logs/

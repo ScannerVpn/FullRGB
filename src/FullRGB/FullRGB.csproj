@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <AssemblyName>FullRGB</AssemblyName>
+    <RootNamespace>FullRGB</RootNamespace>
+    <Version>1.0.0</Version>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+  <!-- app.ico is embedded as a resource too, so the tray icon can load it at runtime -->
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+  <!-- Vendor OpenRGB: the engine is EMBEDDED IN THE EXE (see SDK/EngineBundle.cs), so the app is
+       a single file with no OpenRGB folder next to it. The tree is zipped at build time and added
+       as a managed resource named FullRGB.engine.zip.
+
+       Two targets on purpose:
+         PackEngine        — incremental (Inputs/Outputs), so the 32 MB zip is rebuilt only when a
+                             vendor file actually changes.
+         AddEngineResource — NO Inputs/Outputs, so the item is contributed on EVERY build even when
+                             PackEngine is skipped as up-to-date.
+
+       BaseIntermediateOutputPath, not IntermediateOutputPath: this PropertyGroup is evaluated
+       before the SDK's targets are imported, and IntermediateOutputPath is still empty there —
+       which silently wrote the zip into the project root.
+
+       BeforeTargets=AssignTargetPaths, not CoreCompile: a raw EmbeddedResource becomes
+       ManifestNonResxWithNoCultureOnDisk during PrepareResources. Contributing it any later than
+       AssignTargetPaths means Csc never sees it — the build succeeds and the resource is missing. -->
+  <PropertyGroup>
+    <EngineZip>$(BaseIntermediateOutputPath)engine.zip</EngineZip>
+    <EngineSrc>$(MSBuildProjectDirectory)\..\..\vendor\OpenRGB\OpenRGB Windows 64-bit</EngineSrc>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <VendorBin Include="$(EngineSrc)\**\*" />
+  </ItemGroup>
+
+  <Target Name="PackEngine" Inputs="@(VendorBin)" Outputs="$(EngineZip)">
+    <MakeDir Directories="$(BaseIntermediateOutputPath)" />
+    <Delete Files="$(EngineZip)" />
+    <ZipDirectory SourceDirectory="$(EngineSrc)" DestinationFile="$(EngineZip)" Overwrite="true" />
+    <Message Importance="high" Text="Engine bundle packed -> $(EngineZip)" />
+  </Target>
+
+  <Target Name="AddEngineResource" BeforeTargets="AssignTargetPaths" DependsOnTargets="PackEngine">
+    <ItemGroup>
+      <EmbeddedResource Include="$(EngineZip)" LogicalName="FullRGB.engine.zip" />
+    </ItemGroup>
+  </Target>
+
+</Project>

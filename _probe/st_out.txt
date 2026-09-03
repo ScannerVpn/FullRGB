@@ -1,0 +1,25 @@
+[selftest 0.0s] start-openrgb
+[proc-mgr] enter StartAsync, exe=G:\Ai\RGB Control\src\FullRGB\bin\Debug\net8.0-windows\win-x64\vendor\OpenRGB\OpenRGB Windows 64-bit\OpenRGB.exe
+[proc-mgr] killing orphans
+[proc-mgr] Process.Start...
+[proc-mgr] started pid=29540
+[proc-mgr] port open, done
+[selftest 5.7s] waiting for detection to settle
+[selftest 9.7s] connect-sdk
+[selftest 9.7s] devices=2
+[selftest 9.7s] paint
+[selftest 12.5s] stopping openrgb
+{
+  "ok": true,
+  "stage": "done",
+  "error": "",
+  "deviceCount": 2,
+  "devices": [
+    "ASUS ROG MAXIMUS Z790 DARK HERO (leds=1, vendor=ASUS)",
+    "Corsair Commander Core (leds=0, vendor=Corsair)"
+  ],
+  "paintedRed": true,
+  "paintedOff": true,
+  "elapsedSeconds": 12.5646618
+}
+SELFTEST_RESULT_FILE=C:\Users\Sajad\AppData\Local\Temp\fullrgb-selftest.json
