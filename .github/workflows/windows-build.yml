@@ -1,0 +1,98 @@
+name: windows-build
+
+# Builds the single-file FullRGB.exe on GitHub's runners.
+#
+# WHY: publishing from a local machine means uploading ~84 MB over a home
+# connection for every release. Building here instead means the artifact is
+# produced and attached inside GitHub's network.
+#
+# The OpenRGB engine tree lives in vendor/ IN THIS REPO, so the csproj's
+# PackEngine/AddEngineResource targets work on a clean runner with no extra
+# setup: the zip is created from vendor/ and embedded as FullRGB.engine.zip.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Create/refresh a release with this tag (e.g. v1.0.1). Leave blank to only build an artifact.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/FullRGB/FullRGB.csproj
+
+      - name: Build (Debug) and run headless gates
+        shell: pwsh
+        run: |
+          dotnet build src/FullRGB/FullRGB.csproj -c Debug --nologo
+          # --rendertest and --uitest are pure logic/XAML; they need no RGB hardware.
+          # --fxtest is NOT run here: it talks to real devices, which a runner has none of.
+          $exe = "src/FullRGB/bin/Debug/net8.0-windows/win-x64/FullRGB.exe"
+          foreach ($mode in @('--rendertest', '--uitest')) {
+            $out = "$env:RUNNER_TEMP\$($mode.Trim('-')).txt"
+            $p = Start-Process -FilePath $exe -ArgumentList $mode `
+                   -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
+            $p.WaitForExit(180000) | Out-Null
+            # Test output is UTF-16LE from a WinExe; Get-Content handles the BOM.
+            $text = Get-Content $out -Raw
+            Write-Host $text
+            if ($text -notmatch 'ALL (RENDER|UI) TESTS PASSED') {
+              throw "gate failed: $mode"
+            }
+          }
+
+      - name: Publish single-file exe
+        run: >
+          dotnet publish src/FullRGB/FullRGB.csproj -c Release -r win-x64
+          -p:PublishDir=${{ github.workspace }}\dist\ --nologo
+
+      - name: Verify the engine really is embedded
+        shell: pwsh
+        run: |
+          $exe = "dist/FullRGB.exe"
+          $len = (Get-Item $exe).Length
+          Write-Host "FullRGB.exe = $([math]::Round($len/1MB,1)) MB"
+          # A build with the engine resource MISSING still succeeds but lands ~70 MB.
+          # 78 MB is the floor for "engine.zip is in there" (measured: 84 MB).
+          if ($len -lt 78MB) { throw "exe is $len bytes - engine.zip is probably missing" }
+          (Get-FileHash $exe -Algorithm SHA256).Hash | Tee-Object -FilePath dist/FullRGB.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FullRGB-Windows-x64
+          path: |
+            dist/FullRGB.exe
+            dist/FullRGB.exe.sha256
+          retention-days: 30
+
+      - name: Attach to release
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.tag }}"
+          if (-not (gh release view $tag 2>$null)) {
+            gh release create $tag --title "FullRGB $tag" --notes "Automated build from $env:GITHUB_SHA" --draft
+          }
+          gh release upload $tag dist/FullRGB.exe dist/FullRGB.exe.sha256 --clobber
+          gh release edit $tag --draft=false

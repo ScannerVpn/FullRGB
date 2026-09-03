@@ -2,9 +2,9 @@
 
 **System-wide RGB control for Windows — one app, one file, no plugins.**
 
-<p align="center">
-  <img src="https://via.placeholder.com/560x350/0a0f14/00e5ff?text=FullRGB" alt="FullRGB" width="560"/>
-</p>
+[![windows-build](https://github.com/ScannerVpn/FullRGB/actions/workflows/windows-build.yml/badge.svg)](https://github.com/ScannerVpn/FullRGB/actions/workflows/windows-build.yml)
+[![release](https://img.shields.io/github/v/release/ScannerVpn/FullRGB?include_prereleases)](https://github.com/ScannerVpn/FullRGB/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [فارسی](#فارسی) · [English](#english)
 
@@ -55,7 +55,8 @@ dotnet publish -c Release -r win-x64 -p:PublishDir=dist\ --nologo -v q
 ### Project layout
 ```
 FullRGB/
-├─ PLAN.md                     ← handoff doc (Turkish: read first)
+├─ PLAN.md                     ← handoff doc: read this first
+├─ .github/workflows/          ← windows-build.yml (CI: gates + single-file publish)
 ├─ src/FullRGB/                ← WPF app (net8.0-windows)
 │  ├─ SDK/EngineBundle.cs      ← embed/extract engine
 │  ├─ SDK/OpenRgbProcessManager.cs
@@ -67,7 +68,9 @@ FullRGB/
 ```
 
 ### Releases
-Latest: `dist12\FullRGB.exe` — Lighting is now global-only (Devices tab owns per-device settings), `CloseEngineOnExit` added, Rainbow colour-row lie removed.
+Grab `FullRGB.exe` from [Releases](https://github.com/ScannerVpn/FullRGB/releases/latest).
+Builds are produced by CI (`windows-build.yml`) which runs `--rendertest` + `--uitest` and
+verifies the embedded engine is present before attaching the exe.
 
 ---
 
