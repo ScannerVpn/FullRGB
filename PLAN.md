@@ -1,6 +1,6 @@
 # FullRGB — PLAN.md
 
-**Last updated:** 2026-09-03 (round 11: Lighting→global-only, `CloseEngineOnExit`, engine lifecycle)
+**Last updated:** 2026-09-03 (round 12: music reactivity, 6 user-picked features, v1.1.0 released)
 **Repo root:** `G:\Ai\RGB Control` (no git)
 **Status:** WORKING and verified on the real rig.
 
@@ -13,10 +13,15 @@
 | USB inventory | `FullRGB.exe --usbscan` | 9 devices; mouse + keyboard identified by product string |
 | Screenshots | `FullRGB.exe --uishot` | 6 PNGs in `%TEMP%\fullrgb-shots` |
 
-**Latest build: `dist12\FullRGB.exe`** — a SINGLE 84 MB file. The lighting engine is embedded inside
-it (§3b); there is no `vendor\` folder to ship. All gates above were re-run from this exe
-(`dist12` after Lighting cleanup + CloseEngineOnExit; `dist11`/`dist10` retained).
-One command runs the three headless gates: `bash tools/verify.sh Debug`.
+**Latest build: `dist16\FullRGB.exe`** (v1.1.0, 83.2 MB single file) + GitHub release
+<https://github.com/ScannerVpn/FullRGB/releases/tag/v1.1.0> (CI-built `FullRGB.exe` + `.sha256`).
+Round-12 features: Spectrum/Scanner/Sparkle/Plasma effects, music shapes (bar/mirror/pulse/dots)
++ colourings (gradient/palette/level/rainbow), peak-hold, background colour, sensitivity + beat-flash,
+12 presets, palette + extra-colour editors, rotation scheduler, per-app profiles, per-zone calibration,
+settings backup/export/import, engine version + hardware report + upstream update check.
+CI lesson: redirected stdout encoding differs per runner (UTF-16LE vs UTF-8) — the workflow
+sniffs NUL density instead of assuming; the FAIL veto anchors on `^[FAIL]`/`TEST(S) FAILED`
+because test names contain "failure". Old `dist12`–`dist14` pruned; `dist15` kept as fallback.
 
 This document is self-contained: an agent can continue from it without reading the codebase first.
 
