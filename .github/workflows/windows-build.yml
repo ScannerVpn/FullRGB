@@ -70,7 +70,11 @@ jobs:
             Write-Host $text
             $want = if ($mode -eq '--rendertest') { 'ALL RENDER TESTS PASSED' } else { 'ALL UI TESTS PASSED' }
             if ($text -notmatch [regex]::Escape($want)) { throw "gate failed: $mode (missing '$want')" }
-            if ($text -match 'FAIL') { throw "gate failed: $mode (found FAIL)" }
+            # veto real failures only: a bare 'FAIL' substring also matches test NAMES
+            # like "parser: failure flagged", so anchor on the markers the runner prints
+            if ($text -match '(?m)^\[FAIL\]' -or $text -match 'TEST\(S\) FAILED') {
+              throw "gate failed: $mode (found FAIL)"
+            }
           }
 
       - name: Publish single-file exe

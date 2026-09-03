@@ -24,7 +24,8 @@ run() {   # run <outfile> <timeout-ms> <grep-pattern> <args...>
   if [[ $code -eq 11 ]]; then echo "TIMEOUT after ${ms}ms: $*" >&2; return 1; fi
   if [[ ! -f "$TMPDIR/$out" ]]; then echo "no output captured: $*" >&2; return 1; fi
   tr -d '\000' < "$TMPDIR/$out" | grep -aE "$pat"
-  if tr -d '\000' < "$TMPDIR/$out" | grep -aqE "FAIL|FAILED"; then echo "gate FAILED: $*" >&2; return 1; fi
+  # veto real failures only: bare FAIL also matches test names like "failure flagged"
+  if tr -d '\000' < "$TMPDIR/$out" | grep -aqE "^\[FAIL\]|TEST\(S\) FAILED"; then echo "gate FAILED: $*" >&2; return 1; fi
   return $code
 }
 
