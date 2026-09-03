@@ -32,6 +32,7 @@ public sealed class EffectEngine : IDisposable
     private Task? _sensorLoop;
     private Profile? _profile;
     private readonly object _profileLock = new();
+    private readonly object _lifecycleLock = new();
     private readonly Dictionary<string, ulong> _lastFrame = new();
     private long _framesSent;
 
@@ -59,7 +60,9 @@ public sealed class EffectEngine : IDisposable
 
     // Sensors are read on their own thread: LibreHardwareMonitor's Update() can block for
     // tens of milliseconds, which used to stall the render loop (and, in the UI, the dispatcher).
-    private double? _cpuTemp, _gpuTemp;
+    private volatile object? _cpuTempBox, _gpuTempBox;
+    private double? _cpuTemp { get => (double?)_cpuTempBox; set => _cpuTempBox = value; }
+    private double? _gpuTemp { get => (double?)_gpuTempBox; set => _gpuTempBox = value; }
 
     /// <summary>
     /// Called when the SDK connection cannot be restored by a plain reconnect: should restart the
@@ -157,28 +160,52 @@ public sealed class EffectEngine : IDisposable
 
     public void Apply(Profile profile)
     {
-        lock (_profileLock) _profile = Clone(profile);
-        lock (_lastFrame) _lastFrame.Clear();
+        List<Task> toStopOutside = new();
+        lock (_lifecycleLock)
+        {
+            lock (_profileLock) _profile = Clone(profile);
+            lock (_lastFrame) _lastFrame.Clear();
 
-        // A rescan can add or remove devices; the loops are per device, so rebuild them.
-        var current = PaintableDevices().Select(d => d.Key).ToArray();
-        if (IsRunning && !current.SequenceEqual(_loopDevices)) Stop();
-        if (!IsRunning) Start();
+            // A rescan can add or remove devices; the loops are per device, so rebuild them.
+            var current = PaintableDevices().Select(d => d.Key).ToArray();
+            if (IsRunning && !current.SequenceEqual(_loopDevices)) StopLocked();
+            if (!IsRunning) StartLocked();
+        }
     }
 
     public void Stop()
     {
-        _cts?.Cancel();
-        foreach (var t in _deviceLoops)
-        {
-            try { t.Wait(2000); } catch { /* cancellation */ }
-        }
+        lock (_lifecycleLock) StopLocked();
+    }
+
+    private void StopLocked()
+    {
+        var cts = _cts;
+        _cts = null;
+        try { cts?.Cancel(); } catch { }
+        // Copy first: DeviceLoop never touches _deviceLoops, but Apply may run concurrently.
+        var loops = _deviceLoops.ToArray();
         _deviceLoops.Clear();
-        try { _sensorLoop?.Wait(1500); } catch { /* cancellation */ }
+        var sensor = _sensorLoop;
         _sensorLoop = null;
-        _cts?.Dispose(); _cts = null;
-        lock (_statLock) _stats.Clear();
-        _loopDevices = Array.Empty<string>();
+        // Release the lock while waiting so a concurrent Apply doesn't deadlock;
+        // loops only read _profile/_client which stay valid.
+        Monitor.Exit(_lifecycleLock);
+        try
+        {
+            foreach (var t in loops)
+            {
+                try { t.Wait(2000); } catch { /* cancellation */ }
+            }
+            try { sensor?.Wait(1500); } catch { /* cancellation */ }
+        }
+        finally
+        {
+            Monitor.Enter(_lifecycleLock);
+            try { cts?.Dispose(); } catch { }
+            lock (_statLock) _stats.Clear();
+            _loopDevices = Array.Empty<string>();
+        }
     }
 
     /// <summary>Paints everything black once (used when the user stops effects).</summary>
@@ -201,6 +228,11 @@ public sealed class EffectEngine : IDisposable
         => _client.Controllers.Where(d => d.LedCount > 0 && d.Zones.Any(z => z.LedsCount > 0)).ToList();
 
     private void Start()
+    {
+        lock (_lifecycleLock) StartLocked();
+    }
+
+    private void StartLocked()
     {
         // Devices must be in Direct mode before per-LED writes do anything visible.
         // This runs once at engine start, not on every Apply (slider drags otherwise flood the SDK).
@@ -227,6 +259,11 @@ public sealed class EffectEngine : IDisposable
     private void DeviceLoop(int deviceIndex, CancellationToken token)
     {
         using var timer = new PreciseTimer();
+        // Capture the handle ONCE: Stop() disposes the CTS after cancel, and touching
+        // token.WaitHandle afterwards throws ObjectDisposedException.
+        WaitHandle cancelHandle;
+        try { cancelHandle = token.WaitHandle; } catch { return; }
+        var audioState = new AudioState(); // peak-hold meter memory, one per device loop
         DeviceChannel? channel = null;
         int myGeneration = Volatile.Read(ref _generation);
         int failures = 0;
@@ -263,7 +300,8 @@ public sealed class EffectEngine : IDisposable
                     if (channel is null)
                     {
                         channel = TryOpenChannel(deviceIndex);
-                        stats.UsingOwnChannel = channel is not null;
+                        bool own = channel is not null;
+                        lock (_statLock) stats.UsingOwnChannel = own;
                         if (channel is not null)
                         {
                             windowDelivered = 0;
@@ -284,7 +322,7 @@ public sealed class EffectEngine : IDisposable
                     if (dev is null)
                     {
                         // device vanished (rescan in flight) — idle until Apply() rebuilds the loops
-                        if (!timer.Wait(250, token.WaitHandle)) break;
+                        if (!timer.Wait(250, cancelHandle)) break;
                         continue;
                     }
 
@@ -300,9 +338,10 @@ public sealed class EffectEngine : IDisposable
                         AudioBass = _audio?.Bass ?? 0,
                         AudioMid = _audio?.Mid ?? 0,
                         AudioTreble = _audio?.Treble ?? 0,
+                        Beat = _audio?.Beat ?? 0,
                     };
 
-                    (renderMs, ioMs) = RenderDevice(dev, profile, ctx, channel);
+                    (renderMs, ioMs) = RenderDevice(dev, profile, ctx, channel, audioState);
                     failures = 0;
 
                     windowFrames++;
@@ -311,23 +350,26 @@ public sealed class EffectEngine : IDisposable
                     double sinceMs = sw.Elapsed.TotalMilliseconds - windowStart;
                     if (sinceMs >= 1000)
                     {
-                        stats.Fps = windowFrames * 1000.0 / sinceMs;
-                        stats.RenderMs = accRender / windowFrames;
-                        stats.IoMs = accIo / windowFrames;
-                        stats.SleepMs = accSleep / windowFrames;
-                        if (channel is not null)
+                        lock (_statLock)
                         {
-                            long d = channel.Delivered, dr = channel.Dropped;
-                            stats.DeliveredFps = (d - windowDelivered) * 1000.0 / sinceMs;
-                            stats.DroppedFps = (dr - windowDropped) * 1000.0 / sinceMs;
-                            windowDelivered = d;
-                            windowDropped = dr;
-                        }
-                        else
-                        {
-                            // shared-client fallback: every rendered frame was written inline
-                            stats.DeliveredFps = stats.Fps;
-                            stats.DroppedFps = 0;
+                            stats.Fps = windowFrames * 1000.0 / sinceMs;
+                            stats.RenderMs = accRender / windowFrames;
+                            stats.IoMs = accIo / windowFrames;
+                            stats.SleepMs = accSleep / windowFrames;
+                            if (channel is not null)
+                            {
+                                long d = channel.Delivered, dr = channel.Dropped;
+                                stats.DeliveredFps = (d - windowDelivered) * 1000.0 / sinceMs;
+                                stats.DroppedFps = (dr - windowDropped) * 1000.0 / sinceMs;
+                                windowDelivered = d;
+                                windowDropped = dr;
+                            }
+                            else
+                            {
+                                // shared-client fallback: every rendered frame was written inline
+                                stats.DeliveredFps = stats.Fps;
+                                stats.DroppedFps = 0;
+                            }
                         }
                         windowFrames = 0;
                         accRender = accIo = accSleep = 0;
@@ -344,12 +386,12 @@ public sealed class EffectEngine : IDisposable
                     // iteration reopen. Only escalate to a full SDK revive when that keeps failing.
                     channel?.Dispose();
                     channel = null;
-                    stats.UsingOwnChannel = false;
+                    lock (_statLock) stats.UsingOwnChannel = false;
 
                     if (ShouldAttemptRecovery(failures, token.IsCancellationRequested))
                         Revive(token);
 
-                    if (!timer.Wait(failures > 5 ? 2000 : 300, token.WaitHandle)) break;
+                    if (!timer.Wait(failures > 5 ? 2000 : 300, cancelHandle)) break;
                     next = sw.Elapsed.TotalMilliseconds;
                 }
 
@@ -369,7 +411,7 @@ public sealed class EffectEngine : IDisposable
                     wait = 0;
                 }
                 double sleepStart = sw.Elapsed.TotalMilliseconds;
-                if (!timer.Wait(wait, token.WaitHandle)) break;
+                if (!timer.Wait(wait, cancelHandle)) break;
                 double slept = sw.Elapsed.TotalMilliseconds - sleepStart;
                 accSleep += slept;
                 FrameTrace?.Invoke(deviceIndex, renderMs, ioMs, wait, slept);
@@ -430,11 +472,11 @@ public sealed class EffectEngine : IDisposable
     /// with a channel, ioMs is only the cost of the non-blocking hand-off.
     /// </summary>
     private (double renderMs, double ioMs) RenderDevice(RgbController dev, Profile profile,
-                                                        EffectContext ctx, DeviceChannel? channel)
+                                                        EffectContext ctx, DeviceChannel? channel,
+                                                        AudioState? audioState)
     {
         if (profile.IsExcluded(dev)) return (0, 0);
 
-        var cal = profile.CalibrationFor(dev);
         double renderMs = 0, ioMs = 0;
         var clock = Stopwatch.StartNew();
         List<ZonePaint>? frame = channel is null ? null : new List<ZonePaint>(dev.Zones.Count);
@@ -456,8 +498,8 @@ public sealed class EffectEngine : IDisposable
             int seed = eff.SyncZones ? 0 : dev.Index * 7 + zone.Index + 1;
 
             double t0 = clock.Elapsed.TotalMilliseconds;
-            var rgb = EffectRenderer.Render(eff, n, seed, ctx);
-            cal.Apply(rgb);
+            var rgb = EffectRenderer.Render(eff, n, seed, ctx, audioState);
+            profile.CalibrationFor(dev, zone).Apply(rgb);
             renderMs += clock.Elapsed.TotalMilliseconds - t0;
 
             string key = $"{dev.Index}:{zone.Index}";
@@ -525,10 +567,14 @@ public sealed class EffectEngine : IDisposable
 
     public static EffectDef Clone(EffectDef e) => new()
     {
-        Type = e.Type, ColorHex = e.ColorHex, Color2Hex = e.Color2Hex,
+        Type = e.Type, ColorHex = e.ColorHex, Color2Hex = e.Color2Hex, Color3Hex = e.Color3Hex,
         Speed = e.Speed, Brightness = e.Brightness, TempSensor = e.TempSensor,
         TempLow = e.TempLow, TempHigh = e.TempHigh, CustomPixels = e.CustomPixels,
-        Direction = e.Direction, SyncZones = e.SyncZones, AudioBand = e.AudioBand,
+        Direction = e.Direction, SyncZones = e.SyncZones, AudioBand = e.AudioBand, AudioGain = e.AudioGain,
+        BeatStrength = e.BeatStrength,
+        AudioMode = e.AudioMode, AudioColor = e.AudioColor, AudioBgHex = e.AudioBgHex,
+        PeakHold = e.PeakHold, UsePalette = e.UsePalette,
+        ExtraColors = new List<string>(e.ExtraColors ?? new List<string>()),
     };
 
     public static Profile Clone(Profile p) => new()
@@ -540,6 +586,7 @@ public sealed class EffectEngine : IDisposable
         ExcludedDevices = new List<string>(p.ExcludedDevices),
         ZoneSizes = new Dictionary<string, int>(p.ZoneSizes),
         Calibrations = p.Calibrations.ToDictionary(kv => kv.Key, kv => kv.Value.Clone()),
+        ZoneCalibrations = p.ZoneCalibrations.ToDictionary(kv => kv.Key, kv => kv.Value.Clone()),
     };
 
     public void Dispose() => Stop();

@@ -49,12 +49,19 @@ public sealed class OpenRgbClient : IDisposable
         _host = host; _port = port; _clientName = clientName;
         Disconnect();
         var tcp = new TcpClient();
-        // A blocking Connect() to a dead port can hang ~20 s on Windows; bound it explicitly.
-        if (!tcp.ConnectAsync(host, port).Wait(TimeSpan.FromSeconds(5)))
+        // Bounded connect without .Wait() (which wraps errors in AggregateException and can
+        // deadlock on a UI SynchronizationContext): race the connect against a 5s timeout.
+        try
         {
-            try { tcp.Dispose(); } catch { }
-            throw new SocketException((int)SocketError.TimedOut);
+            var connectTask = tcp.ConnectAsync(host, port);
+            if (!connectTask.Wait(TimeSpan.FromSeconds(5), ct))
+            {
+                try { tcp.Dispose(); } catch { }
+                throw new SocketException((int)SocketError.TimedOut);
+            }
+            if (connectTask.IsFaulted) throw connectTask.Exception?.InnerException ?? new SocketException();
         }
+        catch (OperationCanceledException) { try { tcp.Dispose(); } catch { } throw; }
         tcp.ReceiveTimeout = 15000;
         tcp.SendTimeout = 5000;
         tcp.NoDelay = true;
@@ -62,31 +69,36 @@ public sealed class OpenRgbClient : IDisposable
         _stream = tcp.GetStream();
 
         // 1) protocol version handshake; older servers stay silent -> fall back to v0.
-        // We parse the v4 wire layout (same as openrgb-python), so cap the negotiated version at 4.
+        // The whole Send+Read exchange holds _io so a concurrent render write can never
+        // interleave between our write and its reply and desync the stream.
         ProtocolVersion = 4;
-        Send(0, Pkt.REQUEST_PROTOCOL_VERSION, BitConverter.GetBytes((uint)ProtocolVersion));
-        try
+        lock (_io)
         {
-            // short receive window: silent servers must not stall the connect for 15s
-            _tcp!.ReceiveTimeout = 1500;
-            var (_, reply) = ReadPacket(ct);
-            if (reply.Length >= 4)
+            SendLocked(0, Pkt.REQUEST_PROTOCOL_VERSION, BitConverter.GetBytes((uint)ProtocolVersion), 4);
+            try
             {
-                uint serverMax = BitConverter.ToUInt32(reply, 0);
-                ProtocolVersion = (int)Math.Min(serverMax, 4u);
+                // short receive window: silent servers must not stall the connect for 15s
+                _tcp!.ReceiveTimeout = 1500;
+                var (_, reply) = ReadPacket(ct);
+                if (reply.Length >= 4)
+                {
+                    uint serverMax = BitConverter.ToUInt32(reply, 0);
+                    ProtocolVersion = (int)Math.Min(serverMax, 4u);
+                }
             }
-        }
-        catch (Exception e) when (e is SocketException or IOException)
-        {
-            ProtocolVersion = 0;
-        }
-        finally
-        {
-            _tcp!.ReceiveTimeout = 15000;
-        }
+            catch (Exception e) when (e is SocketException or IOException)
+            {
+                ProtocolVersion = 0;
+            }
+            finally
+            {
+                try { _tcp!.ReceiveTimeout = 15000; } catch { }
+            }
 
-        // 2) announce client name (null-terminated) — no reply expected from the server
-        Send(0, Pkt.SET_CLIENT_NAME, System.Text.Encoding.UTF8.GetBytes(clientName + "\0"));
+            // 2) announce client name (null-terminated) — no reply expected from the server
+            var nameBytes = System.Text.Encoding.UTF8.GetBytes(clientName + "\0");
+            SendLocked(0, Pkt.SET_CLIENT_NAME, nameBytes, nameBytes.Length);
+        }
 
         // 3) enumerate controllers
         Connected = true;
@@ -161,8 +173,9 @@ public sealed class OpenRgbClient : IDisposable
         if (leds <= 0) return;
         lock (_io)
         {
-            var payload = Rent(4 + 2 + leds * 4);
-            BitConverter.TryWriteBytes(payload.AsSpan(0), payload.Length);
+            int size = 4 + 2 + leds * 4;
+            var payload = Rent(size);
+            BitConverter.TryWriteBytes(payload.AsSpan(0), size);
             BitConverter.TryWriteBytes(payload.AsSpan(4), (ushort)leds);
             for (int i = 0; i < leds; i++)
             {
@@ -172,7 +185,7 @@ public sealed class OpenRgbClient : IDisposable
                 payload[o + 2] = rgb[i * 3 + 2];
                 payload[o + 3] = 0;
             }
-            SendLocked(controllerIndex, Pkt.UPDATE_LEDS, payload, payload.Length);
+            SendLocked(controllerIndex, Pkt.UPDATE_LEDS, payload, size);
         }
     }
 
@@ -294,7 +307,11 @@ public sealed class OpenRgbClient : IDisposable
         catch (Exception e) when (e is IOException or SocketException or ObjectDisposedException)
         {
             Connected = false;
-            ConnectionLost?.Invoke(e);
+            // Invoke OUTSIDE the _io lock: a subscriber calling back into the client
+            // (Reconnect/Disconnect) would otherwise deadlock on the same lock.
+            Monitor.Exit(_io);
+            try { ConnectionLost?.Invoke(e); }
+            finally { Monitor.Enter(_io); }
             throw;
         }
     }

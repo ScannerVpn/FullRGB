@@ -32,15 +32,22 @@ public static class EngineTask
     /// </summary>
     public static string BuildRegisterScript(string exePath, int port)
     {
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
         string dir = Path.GetDirectoryName(exePath) ?? "";
+        if (string.IsNullOrWhiteSpace(dir)) dir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         // PowerShell single-quoted strings: only ' needs escaping (doubled).
         string Q(string s) => "'" + s.Replace("'", "''") + "'";
+        // DOMAIN\user (not bare username): bare names fail on domain/AzureAD/MSA accounts
+        // with "No mapping between account names and SIDs".
+        string user = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("USERDOMAIN"))
+            ? Environment.UserName
+            : Environment.GetEnvironmentVariable("USERDOMAIN") + "\\" + Environment.UserName;
 
         return $@"$ErrorActionPreference = 'Stop'
 $action = New-ScheduledTaskAction -Execute {Q(exePath)} `
     -Argument '--server --server-port {port}' -WorkingDirectory {Q(dir)}
 # Highest = the engine runs elevated, which is the whole point (SMBus/PawnIO for RGB RAM).
-$principal = New-ScheduledTaskPrincipal -UserId {Q(Environment.UserName)} `
+$principal = New-ScheduledTaskPrincipal -UserId {Q(user)} `
     -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -75,15 +82,22 @@ exit 0
     /// <summary>
     /// Pulls the &lt;Command&gt; value out of a task XML document. Split out from the schtasks call
     /// so it is unit-testable (`--rendertest`) without touching the Task Scheduler.
+    /// Uses XML parsing (not substring): namespaces/whitespace/attributes/entities break naive search.
     /// </summary>
     internal static string? ParseCommand(string xml)
     {
-        const string open = "<Command>", close = "</Command>";
-        int a = xml.IndexOf(open, StringComparison.Ordinal);
-        if (a < 0) return null;
-        int b = xml.IndexOf(close, a, StringComparison.Ordinal);
-        if (b <= a) return null;
-        return xml.Substring(a + open.Length, b - a - open.Length).Trim().Trim('"');
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(xml);
+            var cmd = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Command");
+            if (cmd is null) return null;
+            var raw = System.Net.WebUtility.HtmlDecode(cmd.Value).Trim();
+            // Strip one layer of surrounding quotes (single or double).
+            if (raw.Length >= 2 && ((raw[0] == '"' && raw[^1] == '"') || (raw[0] == '\'' && raw[^1] == '\'')))
+                raw = raw[1..^1];
+            return raw.Trim();
+        }
+        catch { return null; }
     }
 
     /// <summary>True when a task exists AND points at this installation's engine.</summary>
@@ -115,8 +129,11 @@ exit 0
             // So decode the raw bytes and pick whichever interpretation contains real markup —
             // forcing Encoding.Unicode produced garbage and made the task look unregistered.
             using var ms = new MemoryStream();
-            p.StandardOutput.BaseStream.CopyTo(ms);
-            p.WaitForExit(8000);
+            var copyTask = p.StandardOutput.BaseStream.CopyToAsync(ms);
+            // CopyTo blocks before WaitForExit: a hung schtasks would hang us forever.
+            // Wait async-read + process exit together, with a deadline.
+            if (!copyTask.Wait(TimeSpan.FromSeconds(8))) { try { p.Kill(); } catch { } return null; }
+            if (!p.WaitForExit(8000)) { try { p.Kill(); } catch { } return null; }
             if (!p.HasExited || p.ExitCode != 0) return null;
 
             var bytes = ms.ToArray();
@@ -156,12 +173,16 @@ exit 0
     /// <summary>
     /// Starts the engine through the task. Needs NO elevation and shows no prompt: the Task
     /// Scheduler service launches it at the task's own (highest) level.
+    /// Verifies the task points at THIS install first: otherwise schtasks silently launches
+    /// a stale path after a folder move.
     /// </summary>
     public static bool Run(out string error)
     {
         error = "";
         try
         {
+            var exe = SDK.OpenRgbProcessManager.DefaultExePath();
+            if (!MatchesInstall(exe)) { error = "engine task points at another install; re-register it"; return false; }
             using var p = Process.Start(new ProcessStartInfo
             {
                 FileName = "schtasks.exe",
@@ -172,10 +193,12 @@ exit 0
                 RedirectStandardError = true,
             });
             if (p is null) { error = "could not start schtasks"; return false; }
-            string std = p.StandardOutput.ReadToEnd();
-            string err = p.StandardError.ReadToEnd();
-            p.WaitForExit(15000);
-            if (!p.HasExited) { error = "schtasks /Run did not finish"; return false; }
+            // Async reads: ReadToEnd-before-WaitForExit deadlocks when output fills the pipe.
+            var stdTask = p.StandardOutput.ReadToEndAsync();
+            var errTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(15000)) { try { p.Kill(); } catch { } error = "schtasks /Run did not finish"; return false; }
+            string std = stdTask.Result;
+            string err = errTask.Result;
             if (p.ExitCode != 0)
             {
                 error = string.IsNullOrWhiteSpace(err) ? std.Trim() : err.Trim();

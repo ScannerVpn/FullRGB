@@ -61,6 +61,10 @@ public sealed class Profile
     /// <summary>Per-device colour correction, keyed by RgbController.Key.</summary>
     public Dictionary<string, Calibration> Calibrations { get; set; } = new();
 
+    /// <summary>Per-zone colour correction, keyed by "deviceKey|zoneIndex". Beats device calibration
+    /// (the pump ring and the fans are different chips on the SAME Commander Core).</summary>
+    public Dictionary<string, Calibration> ZoneCalibrations { get; set; } = new();
+
     public static string ZoneKey(RgbController dev, RgbZone zone) => $"{dev.Key}|{zone.Index}";
 
     public bool IsExcluded(RgbController dev) =>
@@ -85,6 +89,10 @@ public sealed class Profile
     public Calibration CalibrationFor(RgbController dev) =>
         Calibrations.TryGetValue(dev.Key, out var c) ? c : new Calibration();
 
+    /// <summary>Correction for one zone: zone entry wins, then the device entry, then identity.</summary>
+    public Calibration CalibrationFor(RgbController dev, RgbZone zone) =>
+        ZoneCalibrations.TryGetValue(ZoneKey(dev, zone), out var z) ? z : CalibrationFor(dev);
+
     /// <summary>Desired LED count for a zone: user value if set, else the zone's max.</summary>
     public int ZoneSize(RgbController dev, RgbZone zone) =>
         ZoneSizes.TryGetValue(ZoneKey(dev, zone), out var n) && n > 0
@@ -95,15 +103,20 @@ public sealed class Profile
     public void PruneTo(IEnumerable<RgbController> devices)
     {
         var keys = devices.Select(d => d.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = devices.Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (keys.Count == 0) return;
-        foreach (var k in DeviceOverrides.Keys.Where(k => !keys.Contains(k)).ToList())
+        // Keep entries matching EITHER Key (new) or Name (legacy): EffectFor falls back to Name.
+        foreach (var k in DeviceOverrides.Keys.Where(k => !keys.Contains(k) && !names.Contains(k)).ToList())
             DeviceOverrides.Remove(k);
-        foreach (var k in Calibrations.Keys.Where(k => !keys.Contains(k)).ToList())
+        foreach (var k in Calibrations.Keys.Where(k => !keys.Contains(k) && !names.Contains(k)).ToList())
             Calibrations.Remove(k);
-        foreach (var k in ZoneOverrides.Keys.Where(k => !keys.Contains(DevicePart(k))).ToList())
+        foreach (var k in ZoneOverrides.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
             ZoneOverrides.Remove(k);
-        foreach (var k in ZoneSizes.Keys.Where(k => !keys.Contains(DevicePart(k))).ToList())
+        foreach (var k in ZoneSizes.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
             ZoneSizes.Remove(k);
+        foreach (var k in ZoneCalibrations.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
+            ZoneCalibrations.Remove(k);
+        ExcludedDevices.RemoveAll(x => !keys.Contains(x) && !names.Contains(x));
 
         static string DevicePart(string zoneKey)
         {
@@ -132,6 +145,18 @@ public sealed class AppSettings
     /// \"must kill from Task Manager\" complaint without forcing UAC on every user.</summary>
     public bool CloseEngineOnExit { get; set; } = false;
 
+    /// <summary>Rotate through profiles automatically (showcase / ambient mode).</summary>
+    public bool SchedulerEnabled { get; set; } = false;
+
+    /// <summary>Minutes between automatic profile switches (1..180).</summary>
+    public double SchedulerMinutes { get; set; } = 10;
+
+    /// <summary>Switch profile when a mapped app is focused: exe filename → profile name.</summary>
+    public Dictionary<string, string> ForegroundMap { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Master switch for per-app profiles.</summary>
+    public bool ForegroundEnabled { get; set; } = false;
+
     public string ActiveProfile { get; set; } = "Default";
     public List<Profile> Profiles { get; set; } = new() { new() };
 
@@ -149,17 +174,26 @@ public sealed class AppSettings
             int n = 2;
             while (!seen.Add(p.Name)) p.Name = $"{baseName} ({n++})";
             p.GlobalEffect ??= new EffectDef();
+            p.GlobalEffect.Normalized();
             p.DeviceOverrides ??= new();
             p.ZoneOverrides ??= new();
             p.ExcludedDevices ??= new();
             p.ZoneSizes ??= new();
             p.Calibrations ??= new();
+            p.ZoneCalibrations ??= new();
+            foreach (var v in p.DeviceOverrides.Values) v?.Normalized();
+            foreach (var v in p.ZoneOverrides.Values) v?.Normalized();
         }
         if (!Profiles.Any(p => p.Name.Equals(ActiveProfile, StringComparison.OrdinalIgnoreCase)))
             ActiveProfile = Profiles[0].Name;
         if (Language != "fa") Language = "en";
         if (ServerPort is < 1 or > 65535) ServerPort = 6742;
         if (!IsHexColor(AccentHex)) AccentHex = "#00E5FF";
+        if (double.IsNaN(SchedulerMinutes) || SchedulerMinutes < 1) SchedulerMinutes = 1;
+        if (SchedulerMinutes > 180) SchedulerMinutes = 180;
+        ForegroundMap ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var k in ForegroundMap.Keys.Where(k => string.IsNullOrWhiteSpace(k)).ToList())
+            ForegroundMap.Remove(k);
         return this;
     }
 
@@ -191,26 +225,50 @@ public static class ProfileStore
     public static AppSettings LoadFrom(string path)
     {
         LastLoadError = null;
+        AppSettings? main = null;
+        DateTime mainTime = DateTime.MinValue;
+        AppSettings? backup = null;
+        DateTime backupTime = DateTime.MinValue;
         try
         {
             if (File.Exists(path))
             {
-                var text = File.ReadAllText(path);
-                var s = JsonSerializer.Deserialize<AppSettings>(text);
-                if (s is not null && s.Profiles is { Count: > 0 }) return s.Normalized();
-                LastLoadError = "settings file was unreadable or did not contain a profile";
+                try
+                {
+                    var text = File.ReadAllText(path);
+                    var s = JsonSerializer.Deserialize<AppSettings>(text);
+                    if (s is not null && s.Profiles is { Count: > 0 })
+                    {
+                        main = s;
+                        mainTime = File.GetLastWriteTimeUtc(path);
+                    }
+                    else LastLoadError = "settings file was unreadable or did not contain a profile";
+                }
+                catch (Exception e) { LastLoadError = e.Message; }
             }
-            // A previous run may have crashed between write and rename: recover the temp file.
+            // A previous run may have crashed between write and rename: prefer whichever is NEWER and valid.
             var tmp = path + ".tmp";
             if (File.Exists(tmp))
             {
-                var s2 = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(tmp));
-                if (s2 is not null && s2.Profiles is { Count: > 0 })
+                try
                 {
-                    LastLoadError = "recovered settings from an interrupted save";
-                    return s2.Normalized();
+                    var s2 = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(tmp));
+                    if (s2 is not null && s2.Profiles is { Count: > 0 })
+                    {
+                        backup = s2;
+                        backupTime = File.GetLastWriteTimeUtc(tmp);
+                    }
                 }
+                catch { /* ignore corrupt tmp if main is good */ }
             }
+            if (backup is not null && (main is null || backupTime > mainTime))
+            {
+                LastLoadError = main is null
+                    ? "recovered settings from an interrupted save"
+                    : "temp settings were newer than main; used the newer copy";
+                return backup.Normalized();
+            }
+            if (main is not null) return main.Normalized();
         }
         catch (Exception e)
         {
@@ -220,6 +278,27 @@ public static class ProfileStore
     }
 
     public static void Save(AppSettings s) => SaveTo(SettingsPath, s);
+
+    /// <summary>Timestamped backup dir for settings (Export targets + auto-backups).</summary>
+    public static string BackupDir => Path.Combine(Dir, "backups");
+
+    /// <summary>Copies the live settings.json aside, keeping the newest 7. Best-effort.</summary>
+    public static void BackupLatest() => BackupLatestTo(SettingsPath, BackupDir, 7);
+
+    internal static void BackupLatestTo(string settingsPath, string backupDir, int keep)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return;
+            Directory.CreateDirectory(backupDir);
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+            File.Copy(settingsPath, Path.Combine(backupDir, $"settings-{stamp}.json"), true);
+            foreach (var f in new DirectoryInfo(backupDir).GetFiles("settings-*.json")
+                         .OrderByDescending(f => f.Name).Skip(keep))
+                try { f.Delete(); } catch { }
+        }
+        catch { }
+    }
 
     public static void SaveTo(string path, AppSettings s)
     {
@@ -231,6 +310,9 @@ public static class ProfileStore
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, path, true);
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(SettingsPath),
+                              StringComparison.OrdinalIgnoreCase))
+                BackupLatest();
         }
         catch { /* settings are best-effort; never crash the UI over them */ }
     }

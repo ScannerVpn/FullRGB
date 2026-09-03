@@ -1,24 +1,39 @@
 #!/usr/bin/env bash
 # FullRGB verification gate. Runs the three headless suites and reports each result.
 # Usage: bash tools/verify.sh [Debug|Release]
-set -u
+set -euo pipefail
 CFG="${1:-Debug}"
-EXE="G:/Ai/RGB Control/src/FullRGB/bin/$CFG/net8.0-windows/win-x64/FullRGB.exe"
-TMP="$LOCALAPPDATA/Temp"
+if [[ "$CFG" != "Debug" && "$CFG" != "Release" ]]; then echo "usage: $0 [Debug|Release]" >&2; exit 2; fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXE="$SCRIPT_DIR/../src/FullRGB/bin/$CFG/net8.0-windows/win-x64/FullRGB.exe"
+if [[ ! -x "$EXE" && ! -f "$EXE" ]]; then echo "missing exe: $EXE (build first)" >&2; exit 1; fi
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
 
-run() {   # run <arg-list> <outfile> <timeout-ms> <grep-pattern>
-  local args="$1" out="$2" ms="$3" pat="$4"
-  rm -f "$TMP/$out"
-  powershell.exe -NoProfile -Command "\$p = Start-Process -FilePath '$(cygpath -w "$EXE" 2>/dev/null || echo "$EXE")' -ArgumentList $args -RedirectStandardOutput \$env:TEMP\\$out -PassThru -NoNewWindow; \$p.WaitForExit($ms)" >/dev/null 2>&1
-  tr -d '\000' < "$TMP/$out" | grep -aE "$pat"
+run() {   # run <outfile> <timeout-ms> <grep-pattern> <args...>
+  local out="$1" ms="$2" pat="$3"; shift 3
+  local arglist=""
+  for a in "$@"; do arglist+="@('$a'),"; done
+  arglist="@(${arglist%,})"
+  local win_exe
+  win_exe="$(cygpath -w "$EXE" 2>/dev/null || echo "$EXE")"
+  local win_tmp
+  win_tmp="$(cygpath -w "$TMPDIR" 2>/dev/null || echo "$TMPDIR")"
+  powershell.exe -NoProfile -Command "\$p = Start-Process -FilePath '$win_exe' -ArgumentList $arglist -RedirectStandardOutput '$win_tmp\\$out' -PassThru -NoNewWindow; if (-not \$p.WaitForExit($ms)) { try { \$p.Kill() } catch {}; exit 11 }; exit \$p.ExitCode" >/dev/null 2>&1
+  local code=$?
+  if [[ $code -eq 11 ]]; then echo "TIMEOUT after ${ms}ms: $*" >&2; return 1; fi
+  if [[ ! -f "$TMPDIR/$out" ]]; then echo "no output captured: $*" >&2; return 1; fi
+  tr -d '\000' < "$TMPDIR/$out" | grep -aE "$pat"
+  if tr -d '\000' < "$TMPDIR/$out" | grep -aqE "FAIL|FAILED"; then echo "gate FAILED: $*" >&2; return 1; fi
+  return $code
 }
 
 echo "== rendertest (pure logic) =="
-run "'--rendertest'" rt.txt 120000 "FAIL|PASSED|TEST\(S\)"
+run rt.txt 120000 "FAIL|PASSED|TEST\(S\)" '--rendertest'
 
 echo "== uitest (XAML, resources, glyphs, l10n) =="
-run "'--uitest'" ui.txt 120000 "FAIL|PASSED|inner|TEST\(S\)"
+run ui.txt 120000 "FAIL|PASSED|inner|TEST\(S\)" '--uitest'
 
 echo "== fxtest (REAL hardware path) =="
-taskkill /F /IM OpenRGB.exe >/dev/null 2>&1
-run "'--fxtest','--seconds=14'" fx.txt 180000 "framesSent|ERR|FAILED|dev[0-9]"
+taskkill /F /IM OpenRGB.exe >/dev/null 2>&1 || true
+run fx.txt 180000 "framesSent|ERR|FAILED|dev[0-9]" '--fxtest' '--seconds=14'

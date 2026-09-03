@@ -51,20 +51,35 @@ public static class EngineBundle
     {
         if (_cachedExe is not null && File.Exists(_cachedExe)) return _cachedExe;
 
-        lock (Gate)
+        // Cross-process gate: two app instances starting together must not delete
+        // each other's half-extracted folder.
+        using var mtx = new Mutex(false, @"Local\FullRGB_EngineExtract");
+        bool owned = false;
+        try { owned = mtx.WaitOne(TimeSpan.FromSeconds(60)); } catch (AbandonedMutexException) { owned = true; }
+        if (!owned) throw new TimeoutException("timed out waiting for engine extraction");
+        try
         {
-            if (_cachedExe is not null && File.Exists(_cachedExe)) return _cachedExe;
+            return EnsureExtractedLocked();
+        }
+        finally { try { if (owned) mtx.ReleaseMutex(); } catch { } }
+    }
+
+    private static string EnsureExtractedLocked()
+    {
+        if (_cachedExe is not null && File.Exists(_cachedExe)) return _cachedExe;
 
             var asm = Assembly.GetExecutingAssembly();
             using var res = asm.GetManifestResourceStream(ResourceName)
                 ?? throw new FileNotFoundException(
                     $"this build has no embedded engine ({ResourceName})");
 
-            // Hash first: it names the folder, and it lets us skip an already-good extraction
-            // without reading a single zip entry.
+            // Copy to a seekable buffer: the manifest stream is not guaranteed seekable,
+            // and we need two passes (hash, then unzip).
+            using var mem = new MemoryStream();
+            res.CopyTo(mem);
             string hash;
             using (var sha = SHA256.Create())
-                hash = Convert.ToHexString(sha.ComputeHash(res))[..12];
+                hash = Convert.ToHexString(sha.ComputeHash(mem.ToArray()))[..12];
 
             var dir = Path.Combine(RootDir, hash);
             var exe = Path.Combine(dir, "OpenRGB.exe");
@@ -76,21 +91,27 @@ public static class EngineBundle
                 return exe;
             }
 
-            // A previous run may have died mid-extract: start clean rather than trust fragments.
-            if (Directory.Exists(dir) && !File.Exists(marker))
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
-            Directory.CreateDirectory(dir);
+            // Extract to a temp dir then ATOMICALLY rename: a concurrent/older instance
+            // never sees a half-extracted folder, and we never delete another's work.
+            var tmpDir = dir + ".tmp-" + Environment.ProcessId;
+            try { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, recursive: true); } catch { }
+            Directory.CreateDirectory(tmpDir);
 
-            res.Position = 0;
-            using (var zip = new ZipArchive(res, ZipArchiveMode.Read, leaveOpen: true))
+            mem.Position = 0;
+            using (var zip = new ZipArchive(mem, ZipArchiveMode.Read, leaveOpen: true))
             {
+                string dirFull = Path.GetFullPath(dir);
+                string dirPrefix = dirFull.EndsWith(Path.DirectorySeparatorChar)
+                    ? dirFull : dirFull + Path.DirectorySeparatorChar;
+                string tmpFull = Path.GetFullPath(tmpDir);
+                string tmpPrefix = tmpFull.EndsWith(Path.DirectorySeparatorChar)
+                    ? tmpFull : tmpFull + Path.DirectorySeparatorChar;
                 foreach (var entry in zip.Entries)
                 {
-                    // Zip-slip guard: an entry named "..\evil.dll" must not escape the folder.
-                    var target = Path.GetFullPath(Path.Combine(dir, entry.FullName));
-                    if (!target.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase))
+                    // Zip-slip guard: an entry named "..\evil.dll" must not escape the folder
+                    // (compare with trailing separator so "dir-evil" cannot pass).
+                    var target = Path.GetFullPath(Path.Combine(tmpDir, entry.FullName));
+                    if (!target.StartsWith(tmpPrefix, StringComparison.OrdinalIgnoreCase))
                         continue;
 
                     if (entry.Name.Length == 0)       // directory entry
@@ -99,8 +120,43 @@ public static class EngineBundle
                         continue;
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    entry.ExtractToFile(target, overwrite: true);
+                    try { entry.ExtractToFile(target, overwrite: true); }
+                    catch (IOException) when (File.Exists(target))
+                    {
+                        // Target locked (e.g. elevated engine still running from it):
+                        // keep the old folder, don't leave a half-extracted mess.
+                        try { Directory.Delete(tmpDir, recursive: true); } catch { }
+                        if (File.Exists(exe)) { _cachedExe = exe; return exe; }
+                        throw;
+                    }
                 }
+            }
+
+            var tmpExe = Path.Combine(tmpDir, "OpenRGB.exe");
+            if (!File.Exists(tmpExe))
+            {
+                try { Directory.Delete(tmpDir, recursive: true); } catch { }
+                throw new FileNotFoundException($"engine bundle unpacked but OpenRGB.exe is missing in {tmpDir}");
+            }
+
+            if (File.Exists(marker) && File.Exists(exe))
+            {
+                // Another instance finished first while we extracted: prefer the complete one.
+                try { Directory.Delete(tmpDir, recursive: true); } catch { }
+                _cachedExe = exe;
+                return exe;
+            }
+            try
+            {
+                if (Directory.Exists(dir))
+                    try { Directory.Delete(dir, recursive: true); } catch { }
+                Directory.Move(tmpDir, dir);
+            }
+            catch
+            {
+                // Move lost the race (or dir locked): fall back to whichever is complete.
+                try { Directory.Delete(tmpDir, recursive: true); } catch { }
+                if (!File.Exists(exe)) throw;
             }
 
             if (!File.Exists(exe))
@@ -109,7 +165,6 @@ public static class EngineBundle
             File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
             _cachedExe = exe;
             return exe;
-        }
     }
 
     /// <summary>

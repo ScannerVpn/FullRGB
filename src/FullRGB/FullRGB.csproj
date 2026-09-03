@@ -49,7 +49,7 @@
        ManifestNonResxWithNoCultureOnDisk during PrepareResources. Contributing it any later than
        AssignTargetPaths means Csc never sees it — the build succeeds and the resource is missing. -->
   <PropertyGroup>
-    <EngineZip>$(BaseIntermediateOutputPath)engine.zip</EngineZip>
+    <EngineZip>$(BaseIntermediateOutputPath)$(Configuration)\engine.zip</EngineZip>
     <EngineSrc>$(MSBuildProjectDirectory)\..\..\vendor\OpenRGB\OpenRGB Windows 64-bit</EngineSrc>
   </PropertyGroup>
 
@@ -58,13 +58,15 @@
   </ItemGroup>
 
   <Target Name="PackEngine" Inputs="@(VendorBin)" Outputs="$(EngineZip)">
-    <MakeDir Directories="$(BaseIntermediateOutputPath)" />
+    <Error Condition="!Exists('$(EngineSrc)')" Text="Engine source missing: $(EngineSrc) — the build would succeed with a missing FullRGB.engine.zip" />
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(EngineZip)'))" />
     <Delete Files="$(EngineZip)" />
     <ZipDirectory SourceDirectory="$(EngineSrc)" DestinationFile="$(EngineZip)" Overwrite="true" />
     <Message Importance="high" Text="Engine bundle packed -> $(EngineZip)" />
   </Target>
 
   <Target Name="AddEngineResource" BeforeTargets="AssignTargetPaths" DependsOnTargets="PackEngine">
+    <Error Condition="!Exists('$(EngineZip)')" Text="Engine bundle missing: $(EngineZip) — refusing to build an exe without the engine inside" />
     <ItemGroup>
       <EmbeddedResource Include="$(EngineZip)" LogicalName="FullRGB.engine.zip" />
     </ItemGroup>

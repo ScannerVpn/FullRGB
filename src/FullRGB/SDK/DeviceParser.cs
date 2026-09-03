@@ -83,7 +83,9 @@ public static class DeviceParser
                 {
                     matH = r.U32();
                     matW = r.U32();
-                    r.Skip(checked((int)(matH * matW * 4)));
+                    long bytes = checked((long)matH * matW * 4);
+                    if (bytes > int.MaxValue) throw new EndOfStreamException();
+                    r.Skip((int)bytes);
                 }
                 ushort segmentCount = r.U16();
                 for (int s = 0; s < segmentCount; s++)
@@ -100,7 +102,7 @@ public static class DeviceParser
                     MatrixHeight = matH, MatrixWidth = matW,
                     StartIndex = runningStart,
                 });
-                runningStart += (int)count;
+                runningStart = count > int.MaxValue - runningStart ? int.MaxValue : runningStart + (int)count;
             }
 
             ushort ledCount = r.U16();

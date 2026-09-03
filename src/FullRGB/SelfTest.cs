@@ -60,19 +60,25 @@ public static class SelfTest
             await Task.Delay(800);
 
             byte[]? first = null;
+            bool wroteAny = false;
             foreach (var dev in client.Controllers)
                 if (dev.LedCount > 0 && first is null)
                 {
                     first = Solid(dev.LedCount, 255, 0, 0);
                     client.UpdateLeds(dev.Index, first);
+                    wroteAny = true;
                 }
             await Task.Delay(1500);
-            r.paintedRed = true;
+            r.paintedRed = wroteAny && first is not null;
 
+            bool wroteOff = false;
             foreach (var dev in client.Controllers.Where(c => c.LedCount > 0).Take(1))
+            {
                 client.UpdateLeds(dev.Index, Solid(dev.LedCount, 0, 0, 0));
+                wroteOff = true;
+            }
             await Task.Delay(500);
-            r.paintedOff = true;
+            r.paintedOff = wroteOff;
 
             r.ok = true;
         }
@@ -88,7 +94,7 @@ public static class SelfTest
             watchdog.Dispose();
         }
         r.elapsedSeconds = sw.Elapsed.TotalSeconds;
-        r.stage = "done";
+        if (!r.ok && r.stage == "done") r.stage = "failed";
 
         var json = JsonSerializer.Serialize(r, new JsonSerializerOptions { WriteIndented = true });
         var outPath = Path.Combine(Path.GetTempPath(), "fullrgb-selftest.json");
@@ -114,6 +120,8 @@ public static class SelfTest
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var mgr = new OpenRgbProcessManager(OpenRgbProcessManager.DefaultExePath());
         var errors = new List<string>();
+        Sensors.TemperatureProvider? temps = null;
+        Effects.EffectEngine? engine = null;
         try
         {
             Console.WriteLine("[fxtest] starting openrgb");
@@ -129,8 +137,9 @@ public static class SelfTest
                 Console.WriteLine($"[fxtest]   {c.Name} kind={c.Kind} leds={c.LedCount} direct={c.InDirectMode} " +
                                   string.Join(",", c.Zones.Select(z => $"{z.Name}:{z.LedsCount}")));
 
-            var temps = new Sensors.TemperatureProvider();
-            var engine = new Effects.EffectEngine(client, temps, null);
+            temps = new Sensors.TemperatureProvider();
+            temps.Start();
+            engine = new Effects.EffectEngine(client, temps, null);
             engine.Status += m => { lock (errors) errors.Add(m); };
 
             var profile = new Config.Profile
@@ -145,11 +154,11 @@ public static class SelfTest
 
             // Per-frame trace: shows whether the frame budget is lost in render, IO or sleep.
             var trace = new List<(int dev, double r, double io, double want, double got)>();
-            engine.FrameTrace = (d, r, io, want, got) => { lock (trace) trace.Add((d, r, io, want, got)); };
+            engine!.FrameTrace = (d, r, io, want, got) => { lock (trace) trace.Add((d, r, io, want, got)); };
 
             engine.Apply(profile);
             await Task.Delay(seconds * 1000);
-            long frames = engine.FramesSent;
+            long frames = engine!.FramesSent;
             double fps = engine.Fps;
             double delivered = engine.DeliveredFps;
             var rates = engine.DeviceRates();
@@ -190,6 +199,8 @@ public static class SelfTest
             Console.WriteLine($"[fxtest] elapsed={sw.Elapsed.TotalSeconds:F1}s");
             // A device-frame counter of >100 with zero errors is the acceptance bar; the measured
             // rate is printed so pacing regressions are visible instead of silent.
+            try { engine?.Stop(); } catch { }
+            try { temps?.Dispose(); } catch { }
             return frames > 100 && errors.Count == 0 ? 0 : 1;
         }
         catch (Exception e)
@@ -197,6 +208,11 @@ public static class SelfTest
             Console.WriteLine("[fxtest] FAILED: " + e);
             return 2;
         }
-        finally { mgr.Stop(); }
+        finally
+        {
+            try { engine?.Stop(); } catch { }
+            try { temps?.Dispose(); } catch { }
+            mgr.Stop();
+        }
     }
 }

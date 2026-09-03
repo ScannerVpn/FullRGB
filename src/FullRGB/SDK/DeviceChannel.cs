@@ -273,12 +273,19 @@ public sealed class DeviceChannel : IDisposable
         }
         // A writer parked inside a multi-hundred-ms device write cannot be interrupted politely;
         // closing the socket makes it throw, and it is a background thread either way.
-        try { _stream?.Close(); } catch { }
-        try { _tcp?.Close(); } catch { }
-        try { _writer?.Join(500); } catch { }
-        _writer = null;
-        _stream = null;
-        _tcp = null;
+        // Capture locals: nulling the fields while WriterLoop reads them would otherwise
+        // surface as a spurious _fault after a graceful close.
+        var writer = _writer;
+        var stream = _stream;
+        var tcp = _tcp;
+        try { stream?.Close(); } catch { }
+        try { tcp?.Close(); } catch { }
+        // Frame cost alone is 343ms+ and ack timeout 20s: 500ms join was too short and let
+        // Open() start a second writer on the same fields, corrupting the wire.
+        try { writer?.Join(5000); } catch { }
+        if (ReferenceEquals(_writer, writer)) _writer = null;
+        if (ReferenceEquals(_stream, stream)) _stream = null;
+        if (ReferenceEquals(_tcp, tcp)) _tcp = null;
     }
 
     public void Dispose() => Close();

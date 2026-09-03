@@ -41,6 +41,8 @@ public static class GlyphCheck
         ("dev.case", "\uE7F8"),
         ("dev.storage", "\uEDA2"),
         ("dev.other", "\uE770"),
+        ("titlebar.restore", "\uE923"),
+        ("accent.check", "\uE73E"),
     };
 
     /// <summary>Returns the entries whose codepoint is NOT in the font.</summary>

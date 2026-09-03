@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -61,10 +63,15 @@ public partial class MainWindow
 
     private void Rescan_Click(object sender, RoutedEventArgs e) => _ = RescanAsync();
 
+    private bool _rescanning;
+
     private async Task RescanAsync()
     {
-        if (_client is null) { await ConnectAsync(); return; }
+        if (_rescanning) return; // StatusPill Border still raises clicks when IsEnabled=false
+        _rescanning = true;
         StatusPill.IsEnabled = false;
+        StatusPill.IsHitTestVisible = false;
+        if (_client is null) { await ConnectAsync(); _rescanning = false; StatusPill.IsEnabled = true; StatusPill.IsHitTestVisible = true; return; }
         bool wasRunning = _engine?.IsRunning == true;
         _engine?.Stop();
         try
@@ -87,6 +94,8 @@ public partial class MainWindow
         finally
         {
             StatusPill.IsEnabled = true;
+            StatusPill.IsHitTestVisible = true;
+            _rescanning = false;
             SyncRunButtons();
         }
     }
@@ -102,6 +111,10 @@ public partial class MainWindow
         MinimizedChk.IsChecked = App.Settings.StartMinimized;
         AutoFxChk.IsChecked = App.Settings.AutoStartEffects;
         CloseEngineChk.IsChecked = App.Settings.CloseEngineOnExit;
+        SchedChk.IsChecked = App.Settings.SchedulerEnabled;
+        BuildSchedMinutes();
+        FgChk.IsChecked = App.Settings.ForegroundEnabled;
+        FgMapBox.Text = string.Join("\n", App.Settings.ForegroundMap.Select(kv => $"{kv.Key}={kv.Value}"));
         BuildAccentSwatches();
         RefreshAdvanced();
         _loadingUi = false;
@@ -119,6 +132,7 @@ public partial class MainWindow
     {
         if (!App.Settings.Profiles.Any(p => p.Name == name)) return;
         App.Settings.ActiveProfile = name;
+        ResetSchedCountdown(); // a manual switch restarts the rotation countdown
         _target = TargetMode.Global;
         _selectedKey = null;
         _selectedZone = -1;
@@ -369,19 +383,20 @@ public partial class MainWindow
     private async Task RestartEngineAsync()
     {
         SetStatus(L10n.T("status.starting"), StatusKind.Busy);
-        _engine?.Stop();
-        _engine?.Dispose();
+        try { _engine?.Stop(); } catch { }
+        try { _engine?.Dispose(); } catch { }
         _engine = null;
-        _client?.Dispose();
+        try { _client?.Dispose(); } catch { }
         _client = null;
 
         // An engine started from the task runs elevated and cannot be killed from here; ask it to
         // exit via its own process only when we own it.
-        _mgr?.Stop();
+        try { _mgr?.Stop(); } catch { }
         _mgr = null;
 
         // Give a previously-elevated engine time to release the SDK port before reconnecting.
         await Task.Delay(1500);
+        if (_reallyExiting || !IsLoaded) return; // closed during restart: don't resurrect
         await ConnectAsync();
     }
 
@@ -426,9 +441,21 @@ public partial class MainWindow
         if (_loadingUi) return;
         bool want = AutostartChk.IsChecked == true;
         App.Settings.StartWithWindows = want;
-        if (!Autostart.Set(want, App.Settings.StartMinimized ? "--minimized" : ""))
-            SetStatus(L10n.T("status.failed", "schtasks"), StatusKind.Error);
-        ProfileStore.Save(App.Settings);
+        AutostartChk.IsEnabled = false;
+        _ = Task.Run(() =>
+        {
+            bool ok = Autostart.Set(want, App.Settings.StartMinimized ? "--minimized" : "");
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    AutostartChk.IsEnabled = true;
+                    if (!ok) SetStatus(L10n.T("status.failed", "schtasks"), StatusKind.Error);
+                    ProfileStore.Save(App.Settings);
+                }
+                catch { }
+            });
+        });
     }
 
     private void Minimized_Changed(object sender, RoutedEventArgs e)
@@ -437,7 +464,7 @@ public partial class MainWindow
         App.Settings.StartMinimized = MinimizedChk.IsChecked == true;
         // The scheduled task embeds the argument, so it has to be rewritten when this flips.
         if (App.Settings.StartWithWindows)
-            Autostart.Set(true, App.Settings.StartMinimized ? "--minimized" : "");
+            _ = Task.Run(() => Autostart.Set(true, App.Settings.StartMinimized ? "--minimized" : ""));
         ProfileStore.Save(App.Settings);
     }
 
@@ -454,6 +481,203 @@ public partial class MainWindow
         App.Settings.CloseEngineOnExit = CloseEngineChk.IsChecked == true;
         ProfileStore.Save(App.Settings);
     }
+
+    // ---------- rotation scheduler ----------
+
+    private static readonly double[] SchedOptions = { 1, 5, 10, 15, 30, 60, 120 };
+
+    private void BuildSchedMinutes()
+    {
+        SchedCmb.Items.Clear();
+        foreach (var m in SchedOptions) SchedCmb.Items.Add(L10n.T("sched.minutes", m));
+        int best = 0;
+        for (int i = 0; i < SchedOptions.Length; i++)
+            if (Math.Abs(SchedOptions[i] - App.Settings.SchedulerMinutes) < Math.Abs(SchedOptions[best] - App.Settings.SchedulerMinutes))
+                best = i;
+        SchedCmb.SelectedIndex = best;
+    }
+
+    private void Sched_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.SchedulerEnabled = SchedChk.IsChecked == true;
+        ResetSchedCountdown();
+        ProfileStore.Save(App.Settings);
+    }
+
+    private void SchedCmb_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi || SchedCmb.SelectedIndex < 0) return;
+        App.Settings.SchedulerMinutes = SchedOptions[Math.Clamp(SchedCmb.SelectedIndex, 0, SchedOptions.Length - 1)];
+        ResetSchedCountdown();
+        ProfileStore.Save(App.Settings);
+    }
+
+    /// <summary>Next profile in nav order, wrapping around (-1 when fewer than two).</summary>
+    internal static int SchedulerNextIndex(IList<string> names, string active)
+    {
+        if (names.Count <= 1) return -1;
+        int at = -1;
+        for (int i = 0; i < names.Count; i++)
+            if (names[i] == active) { at = i; break; }
+        return (at + 1) % names.Count;
+    }
+
+    private void ResetSchedCountdown()
+        => _nextSchedSwitch = DateTime.UtcNow + TimeSpan.FromMinutes(App.Settings.SchedulerMinutes);
+
+    private void SchedTick()
+    {
+        if (!App.Settings.SchedulerEnabled || App.Settings.Profiles.Count <= 1) return;
+        if (DateTime.UtcNow < _nextSchedSwitch) return;
+        var names = App.Settings.Profiles.Select(p => p.Name).ToList();
+        int next = SchedulerNextIndex(names, CurrentProfile().Name);
+        if (next >= 0) SwitchProfile(names[next]);
+        ResetSchedCountdown();
+    }
+
+    // ---------- per-app profiles ----------
+
+    private void Fg_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.ForegroundEnabled = FgChk.IsChecked == true;
+        _autoSwitched = false;
+        ProfileStore.Save(App.Settings);
+    }
+
+    private void FgMap_Save(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.ForegroundMap = ForegroundWatcher.ParseMap(FgMapBox.Text);
+        FgMapBox.Text = string.Join("\n", App.Settings.ForegroundMap.Select(kv => $"{kv.Key}={kv.Value}"));
+        _autoSwitched = false;
+        ProfileStore.Save(App.Settings);
+    }
+
+    private void FgTick()
+    {
+        if (!App.Settings.ForegroundEnabled || App.Settings.ForegroundMap.Count == 0) return;
+        string? want;
+        try { want = ForegroundWatcher.MatchProfile(App.Settings.ForegroundMap, ForegroundWatcher.CurrentExe(), App.Settings.Profiles.Select(p => p.Name)); }
+        catch { return; }
+        string active = CurrentProfile().Name;
+        if (want is not null)
+        {
+            if (want != active)
+            {
+                if (!_autoSwitched) { _manualProfile = active; _autoSwitched = true; }
+                SwitchProfile(want);
+            }
+        }
+        else if (_autoSwitched)
+        {
+            _autoSwitched = false;
+            if (_manualProfile is not null && App.Settings.Profiles.Any(p => p.Name == _manualProfile))
+                SwitchProfile(_manualProfile);
+        }
+    }
+
+    // ---------- settings backup ----------
+
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.SaveFileDialog
+            {
+                Filter = "JSON|*.json",
+                FileName = "fullrgb-settings.json",
+            };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            ProfileStore.SaveTo(dlg.FileName, App.Settings);
+            SetStatus(L10n.T("backup.done", dlg.FileName), StatusKind.Ok);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+
+    private void Import_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.OpenFileDialog { Filter = "JSON|*.json" };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            var loaded = ProfileStore.LoadFrom(dlg.FileName);
+            if (loaded.Profiles.Count == 0) { SetStatus(L10n.T("backup.invalid"), StatusKind.Error); return; }
+            ProfileStore.BackupLatest();
+            App.Settings = loaded;
+            L10n.Set(App.Settings.Language);
+            Theme.ApplyAccent(App.Settings.AccentHex);
+            ApplyLanguage();
+            LoadProfileToUi();
+            BuildDeviceList();
+            BuildDevicePicker();
+            BuildEffectEditor();
+            RefreshStatus();
+            ProfileStore.Save(App.Settings);
+            SetStatus(L10n.T("backup.restored"), StatusKind.Ok);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+}
+
+/// <summary>Reads the focused app's exe name + parses the exe→profile map (testable, no UI).</summary>
+internal static class ForegroundWatcher
+{
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    /// <summary>Test hook: when set, CurrentExe returns this instead of calling Win32.</summary>
+#pragma warning disable CS0649
+    internal static Func<string?>? ExeOverride;
+#pragma warning restore CS0649
+
+    internal static string? CurrentExe()
+    {
+        if (ExeOverride is not null) return ExeOverride();
+        try
+        {
+            IntPtr h = GetForegroundWindow();
+            if (h == IntPtr.Zero) return null;
+            GetWindowThreadProcessId(h, out uint pid);
+            using var p = Process.GetProcessById((int)pid);
+            string? path = null;
+            try { path = p.MainModule?.FileName; } catch { return p.ProcessName + ".exe"; }
+            return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Parses "exe=Profile" lines (blanks and # comments ignored, last wins).</summary>
+    internal static Dictionary<string, string> ParseMap(string? text)
+    {
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in (text ?? "").Split('\n'))
+        {
+            var line = raw.Trim().TrimEnd('\r');
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            int eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            string exe = line[..eq].Trim(), prof = line[(eq + 1)..].Trim();
+            if (exe.Length == 0 || prof.Length == 0) continue;
+            d[exe] = prof;
+        }
+        return d;
+    }
+
+    /// <summary>Profile mapped to the focused exe, or null (unknown exe / unknown profile).</summary>
+    internal static string? MatchProfile(Dictionary<string, string>? map, string? exe, IEnumerable<string> profiles)
+    {
+        if (map is null || string.IsNullOrEmpty(exe)) return null;
+        var set = new HashSet<string>(profiles, StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in map)
+            if (exe.Equals(kv.Key, StringComparison.OrdinalIgnoreCase) && set.Contains(kv.Value))
+                return kv.Value;
+        return null;
+    }
 }
 
 /// <summary>
@@ -467,7 +691,8 @@ public static class Autostart
 
     public static string BuildCommand(bool enable, string exe, string args)
         => enable
-            ? $"/Create /F /TN {TaskName} /SC ONLOGON /RL LIMITED /TR \"\\\"{exe}\\\" {args}\""
+            ? $"/Create /F /TN {TaskName} /SC ONLOGON /RL LIMITED /TR \"\\\"{exe}\\\""
+                + (string.IsNullOrWhiteSpace(args) ? "\"" : $" {args.Trim()}\"")
             : $"/Delete /F /TN {TaskName}";
 
     public static bool Set(bool enable, string args)

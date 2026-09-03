@@ -15,6 +15,10 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
     inputs:
       tag:
@@ -51,19 +55,24 @@ jobs:
             $out = "$env:RUNNER_TEMP\$($mode.Trim('-')).txt"
             $p = Start-Process -FilePath $exe -ArgumentList $mode `
                    -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
-            $p.WaitForExit(180000) | Out-Null
-            # Test output is UTF-16LE from a WinExe; Get-Content handles the BOM.
-            $text = Get-Content $out -Raw
+            if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {}; throw "gate timed out: $mode" }
+            if ($p.ExitCode -ne 0) { throw "gate exit code $($p.ExitCode): $mode" }
+            # Test output is UTF-16LE from a WinExe; decode explicitly (Get-Content -Raw
+            # without -Encoding Unicode mangles it on some runners).
+            $text = Get-Content $out -Raw -Encoding Unicode
             Write-Host $text
-            if ($text -notmatch 'ALL (RENDER|UI) TESTS PASSED') {
-              throw "gate failed: $mode"
-            }
+            $want = if ($mode -eq '--rendertest') { 'ALL RENDER TESTS PASSED' } else { 'ALL UI TESTS PASSED' }
+            if ($text -notmatch [regex]::Escape($want)) { throw "gate failed: $mode (missing '$want')" }
+            if ($text -match 'FAIL') { throw "gate failed: $mode (found FAIL)" }
           }
 
       - name: Publish single-file exe
-        run: >
-          dotnet publish src/FullRGB/FullRGB.csproj -c Release -r win-x64
-          -p:PublishDir=${{ github.workspace }}\dist\ --nologo
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.tag }}"
+          if ($ver.StartsWith('v')) { $ver = $ver.Substring(1) }
+          if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '1.0.0' }
+          dotnet publish src/FullRGB/FullRGB.csproj -c Release -r win-x64 -p:PublishDir="${{ github.workspace }}\dist\" -p:Version="$ver" --nologo
 
       - name: Verify the engine really is embedded
         shell: pwsh

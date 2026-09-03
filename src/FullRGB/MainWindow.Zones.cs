@@ -6,6 +6,7 @@ using FullRGB.SDK;
 using Brush = System.Windows.Media.Brush;
 using Button = System.Windows.Controls.Button;
 using RadioButton = System.Windows.Controls.RadioButton;
+using ComboBox = System.Windows.Controls.ComboBox;
 using TextBox = System.Windows.Controls.TextBox;
 using Slider = System.Windows.Controls.Slider;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
@@ -187,10 +188,13 @@ public partial class MainWindow
 
     // ---------- per-device colour correction ----------
 
+    /// <summary>Selected calibration scope on the Devices page (-1 = whole device, else zone index).</summary>
+    private int _calZone = -1;
+
     /// <summary>
-    /// Trim sliders for one device's R/G/B gain + gamma. This is the real fix for
-    /// "the same colour looks different on the pump than on the fans": the LED chips
-    /// differ, so identical RGB values do not produce identical light.
+    /// Trim sliders for R/G/B gain + gamma. Scope picker on top: whole device, or one zone
+    /// (the pump ring and the fans are different chips on the same Commander Core, so a
+    /// single device-wide trim cannot fix both).
     /// </summary>
     private void BuildCalibration(RgbController dev)
     {
@@ -199,11 +203,28 @@ public partial class MainWindow
         CalHint.Text = L10n.T("cal.hint");
 
         var profile = CurrentProfile();
-        var cal = profile.CalibrationFor(dev).Clone();
+        var scope = new ComboBox { Style = (Style)FindResource("Cmb"), Margin = new Thickness(0, 0, 0, 10) };
+        scope.Items.Add(L10n.T("cal.whole"));
+        foreach (var z in dev.Zones) scope.Items.Add(z.Name);
+        scope.SelectedIndex = _calZone < 0 ? 0
+            : dev.Zones.FindIndex(z => z.Index == _calZone) + 1;
+        if (scope.SelectedIndex < 0 || scope.SelectedIndex >= scope.Items.Count) scope.SelectedIndex = 0;
+        scope.SelectionChanged += (_, _) =>
+        {
+            _calZone = scope.SelectedIndex <= 0 ? -1
+                : dev.Zones[Math.Clamp(scope.SelectedIndex - 1, 0, dev.Zones.Count - 1)].Index;
+            BuildCalibration(dev);
+        };
+        CalPanel.Children.Add(scope);
+
+        RgbZone? scopeZone = _calZone < 0 ? null : dev.Zones.FirstOrDefault(z => z.Index == _calZone);
+        string scopeKey = scopeZone is null ? dev.Key : Profile.ZoneKey(dev, scopeZone);
+        var cal = (scopeZone is null ? profile.CalibrationFor(dev) : profile.CalibrationFor(dev, scopeZone)).Clone();
 
         void Persist()
         {
-            profile.Calibrations[dev.Key] = cal.Clone();
+            if (scopeZone is null) profile.Calibrations[dev.Key] = cal.Clone();
+            else profile.ZoneCalibrations[scopeKey] = cal.Clone();
             _engine?.Apply(profile);
         }
 
@@ -262,7 +283,8 @@ public partial class MainWindow
         };
         reset.Click += (_, _) =>
         {
-            profile.Calibrations.Remove(dev.Key);
+            if (scopeZone is null) profile.Calibrations.Remove(dev.Key);
+            else profile.ZoneCalibrations.Remove(scopeKey);
             ProfileStore.Save(App.Settings);
             _engine?.Apply(profile);
             BuildCalibration(dev);

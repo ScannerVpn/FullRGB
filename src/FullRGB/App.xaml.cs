@@ -7,8 +7,9 @@ namespace FullRGB;
 
 public partial class App : Application
 {
-    public static AppSettings Settings { get; private set; } = new();
+    public static AppSettings Settings { get; set; } = new();
     private static Mutex? _singleInstance;
+    private static bool _headless; // --rendertest/--uitest/etc must never touch settings.json
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -17,6 +18,7 @@ public partial class App : Application
         // --selftest / --fxtest: headless hardware verification (must run BEFORE UAC relaunch)
         if (e.Args.Any(a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             // Run on the thread pool: awaiting on the Dispatcher context with GetResult() would deadlock.
             var code = Task.Run(() => SelfTest.RunAsync(e.Args)).GetAwaiter().GetResult();
@@ -25,6 +27,7 @@ public partial class App : Application
         }
         if (e.Args.Any(a => a.Equals("--fxtest", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             int secs = 15;
             var sArg = e.Args.FirstOrDefault(a => a.StartsWith("--seconds=", StringComparison.OrdinalIgnoreCase));
@@ -37,6 +40,7 @@ public partial class App : Application
         // calibration and tray-icon decoding.
         if (e.Args.Any(a => a.Equals("--rendertest", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             Shutdown(RenderTests.Run());
             return;
@@ -45,6 +49,7 @@ public partial class App : Application
         // resource keys fail the build gate instead of the user's first launch.
         if (e.Args.Any(a => a.Equals("--uitest", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             FullRGB.MainWindow.Headless = true;   // 'MainWindow' alone binds to Application.MainWindow here
             Settings = new AppSettings();
@@ -56,6 +61,7 @@ public partial class App : Application
         // --uishot: render the windows to PNG for layout review (no hardware, no focus steal)
         if (e.Args.Any(a => a.Equals("--uishot", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             FullRGB.MainWindow.Headless = true;   // 'MainWindow' alone binds to Application.MainWindow here
             Settings = new AppSettings();
@@ -71,6 +77,7 @@ public partial class App : Application
         var taskArg = e.Args.FirstOrDefault(a => a.StartsWith("--enginetask", StringComparison.OrdinalIgnoreCase));
         if (taskArg is not null)
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             string verb = taskArg.Contains('=') ? taskArg.Split('=')[1].ToLowerInvariant() : "status";
             int port = ProfileStore.Load().ServerPort;
@@ -108,6 +115,7 @@ public partial class App : Application
         // DEVICE reports. Used to answer "why isn't my mouse in the list?" with evidence.
         if (e.Args.Any(a => a.Equals("--usbscan", StringComparison.OrdinalIgnoreCase)))
         {
+            _headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             foreach (var d in Diag.UsbScan.Scan())
                 Console.WriteLine($"{d.VidPid}  {d.DeviceClass,-12} {d.Label}");
@@ -117,7 +125,23 @@ public partial class App : Application
 
         // Only one FullRGB may drive the hardware at a time: two engines fight over the SDK port
         // and each one's zone resizes/mode switches undo the other's.
-        _singleInstance = new Mutex(true, @"Global\FullRGB_SingleInstance", out bool isFirst);
+        // Local\ (not Global\): standard users cannot create a Global mutex (UnauthorizedAccessException).
+        bool isFirst = true;
+        try
+        {
+            _singleInstance = new Mutex(true, @"Local\FullRGB_SingleInstance", out isFirst);
+        }
+        catch (AbandonedMutexException)
+        {
+            // Previous instance crashed while holding it: we now own it.
+            isFirst = true;
+        }
+        catch
+        {
+            // No mutex (e.g. access denied): let the port check in ProcessManager arbitrate instead.
+            isFirst = true;
+            _singleInstance = null;
+        }
         if (!isFirst)
         {
             System.Windows.MessageBox.Show(
@@ -157,7 +181,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        ProfileStore.Save(Settings);
+        if (!_headless) ProfileStore.Save(Settings);
         try { _singleInstance?.ReleaseMutex(); } catch { }
         _singleInstance?.Dispose();
         base.OnExit(e);

@@ -37,6 +37,14 @@ public partial class MainWindow : Window
     private bool _loadingUi;
     private TrayController? _tray;
     private bool _reallyExiting;
+    private bool _osShuttingDown;
+    private Action<string>? _engineStatusHandler;
+    // rotation scheduler + per-app profiles
+    private System.Windows.Threading.DispatcherTimer? _schedTimer;
+    private System.Windows.Threading.DispatcherTimer? _fgTimer;
+    private DateTime _nextSchedSwitch = DateTime.UtcNow + TimeSpan.FromMinutes(10);
+    private bool _autoSwitched;
+    private string? _manualProfile;
     /// <summary>Device inventory sentence for the title subtitle and the tray tooltip.</summary>
     private string _inventory = "";
 
@@ -56,13 +64,55 @@ public partial class MainWindow : Window
         ApplyLanguage();
         Loaded += async (_, _) =>
         {
-            StartPreview();   // the hero preview must animate even if the SDK never connects
-            if (Headless) { BuildEffectEditor(); LoadProfileToUi(); BuildDevicePicker(); TickPreview(); return; }
-            InitTray();   // tray icon exists for the whole session, not only when minimised
-            if (_client is { Connected: true }) OnConnected();
-            else await ConnectAsync();
+            try
+            {
+                StartPreview();   // the hero preview must animate even if the SDK never connects
+                if (Headless) { BuildEffectEditor(); LoadProfileToUi(); BuildDevicePicker(); TickPreview(); return; }
+                InitTray();   // tray icon exists for the whole session, not only when minimised
+                StartAutomation();
+                if (_client is { Connected: true }) OnConnected();
+                else await ConnectAsync();
+            }
+            catch (Exception e)
+            {
+                try { SetStatus(L10n.T("status.failed", e.Message), StatusKind.Error); } catch { }
+            }
         };
         StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) HideToTray(); };
+        try
+        {
+            Application.Current.SessionEnding += (_, _) => { _osShuttingDown = true; _reallyExiting = true; };
+        }
+        catch { }
+    }
+
+    // ---------- automation (rotation scheduler + per-app profiles) ----------
+
+    /// <summary>Two cheap polling timers (30 s rotation, 2 s foreground). Started once, UI thread.</summary>
+    private void StartAutomation()
+    {
+        if (_schedTimer is not null) return;
+        ResetSchedCountdown();
+        _schedTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(30),
+        };
+        _schedTimer.Tick += (_, _) => { try { SchedTick(); } catch { } };
+        _schedTimer.Start();
+        _fgTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        _fgTimer.Tick += (_, _) => { try { FgTick(); } catch { } };
+        _fgTimer.Start();
+    }
+
+    private void StopAutomation()
+    {
+        try { _schedTimer?.Stop(); } catch { }
+        try { _fgTimer?.Stop(); } catch { }
+        _schedTimer = null;
+        _fgTimer = null;
     }
 
     // ---------- connection ----------
@@ -158,7 +208,16 @@ public partial class MainWindow : Window
         catch { _audio = null; _audioFailed = true; }
 
         _engine = new EffectEngine(_client, _temps, _audio);
-        _engine.Status += m => Dispatcher.BeginInvoke(() => SetStatus(m, StatusKind.Warn));
+        _engineStatusHandler = m =>
+        {
+            try
+            {
+                if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+                Dispatcher.BeginInvoke(() => { try { SetStatus(m, StatusKind.Warn); } catch { } });
+            }
+            catch { }
+        };
+        _engine.Status += _engineStatusHandler;
 
         // If OpenRGB itself dies, restart the process and rebuild the session.
         _engine.ReviveEngine = ct =>
@@ -185,7 +244,8 @@ public partial class MainWindow : Window
 
     private Profile CurrentProfile() =>
         App.Settings.Profiles.FirstOrDefault(x => x.Name == App.Settings.ActiveProfile)
-        ?? App.Settings.Profiles[0];
+        ?? App.Settings.Profiles.FirstOrDefault()
+        ?? new Profile();
 
     // ---------- banners ----------
 
@@ -280,6 +340,15 @@ public partial class MainWindow : Window
         AutoFxChk.Content = L10n.T("settings.autofx");
         CloseEngineChk.Content = L10n.T("settings.closeEngine");
         CloseEngineChk.ToolTip = L10n.T("settings.closeEngineHint");
+        SchedHdr.Text = L10n.T("sched.title");
+        SchedChk.Content = L10n.T("sched.enable");
+        SchedEveryLbl.Text = L10n.T("sched.every");
+        FgHdr.Text = L10n.T("fg.title");
+        FgChk.Content = L10n.T("fg.enable");
+        FgHint.Text = L10n.T("fg.hint");
+        BackupHdr.Text = L10n.T("backup.title");
+        ExportBtn.Content = L10n.T("backup.export");
+        ImportBtn.Content = L10n.T("backup.import");
         AboutHdr.Text = L10n.T("about.title");
         AboutTxt.Text = L10n.T("about.body");
         // The hardware page owns AdvancedHdr / Why*Txt now; BuildHardwarePage fills them when the
@@ -325,20 +394,24 @@ public partial class MainWindow : Window
         _tray = new TrayController(this)
         {
             IsEffectsRunning = () => _engine?.IsRunning == true,
-            ToggleEffects = start => Dispatcher.Invoke(() =>
+            ToggleEffects = start => Dispatcher.BeginInvoke(() =>
             {
-                if (start) { _engine?.Apply(CurrentProfile()); RefreshStatus(); }
-                else { _engine?.Stop(); SetStatus(L10n.T("status.stopped"), StatusKind.Info); }
-                SyncRunButtons();
+                try
+                {
+                    if (start) { _engine?.Apply(CurrentProfile()); RefreshStatus(); }
+                    else { _engine?.Stop(); SetStatus(L10n.T("status.stopped"), StatusKind.Info); }
+                    SyncRunButtons();
+                }
+                catch { }
             }),
-            Blackout = () => Dispatcher.Invoke(() => Blackout_Click(this, new RoutedEventArgs())),
+            Blackout = () => Dispatcher.BeginInvoke(() => { try { Blackout_Click(this, new RoutedEventArgs()); } catch { } }),
             ProfileNames = () => App.Settings.Profiles.Select(p => p.Name).ToList(),
             ActiveProfile = () => CurrentProfile().Name,
-            SelectProfile = name => Dispatcher.Invoke(() => SwitchProfile(name)),
-            ExitApp = () => Dispatcher.Invoke(() =>
+            SelectProfile = name => Dispatcher.BeginInvoke(() => { try { SwitchProfile(name); } catch { } }),
+            ExitApp = () => Dispatcher.BeginInvoke(() =>
             {
                 _reallyExiting = true;
-                Application.Current.Shutdown();
+                try { Application.Current.Shutdown(); } catch { }
             }),
         };
     }
@@ -353,27 +426,50 @@ public partial class MainWindow : Window
     {
         // Closing the window keeps the effects running and parks the app in the tray;
         // the tray's Exit item is the way out. This is what users expect from RGB software.
-        if (!_reallyExiting)
+        // Never block OS shutdown/logoff: that would hang reboot.
+        if (e is System.ComponentModel.CancelEventArgs)
         {
-            e.Cancel = true;
-            HideToTray();
-            return;
+            bool shuttingDown = false;
+            try
+            {
+                // CloseReason is on the WinForms EventArgs; WPF passes plain CancelEventArgs,
+                // so detect session-ending via Application.SessionEnding registration below.
+                shuttingDown = _osShuttingDown;
+            }
+            catch { }
+            if (!_reallyExiting && !shuttingDown)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
         }
         base.OnClosing(e);
     }
 
     protected override void OnClosed(EventArgs e)
     {
-        StopPreview();
-        _engine?.Stop();
-        _audio?.Dispose();
-        _temps.Dispose();
-        _client?.Dispose();
-        if (App.Settings.CloseEngineOnExit)
-            _mgr?.StopIncludingElevated();
-        else
-            _mgr?.Stop();
-        _tray?.Dispose();
+        try { StopPreview(); } catch { }
+        StopAutomation();
+        try
+        {
+            if (_engine is not null && _engineStatusHandler is not null)
+                _engine.Status -= _engineStatusHandler;
+        }
+        catch { }
+        try { _engine?.Stop(); } catch { }
+        try { _audio?.Dispose(); } catch { }
+        try { _temps.Dispose(); } catch { }
+        try { _client?.Dispose(); } catch { }
+        try
+        {
+            if (App.Settings.CloseEngineOnExit)
+                _mgr?.StopIncludingElevated();
+            else
+                _mgr?.Stop();
+        }
+        catch { }
+        try { _tray?.Dispose(); } catch { }
         base.OnClosed(e);
     }
 

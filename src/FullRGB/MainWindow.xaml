@@ -364,6 +364,46 @@
 
             <Border Style="{StaticResource CardBd}" Margin="0,0,0,10">
               <StackPanel>
+                <TextBlock x:Name="SchedHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                <CheckBox x:Name="SchedChk" Style="{StaticResource Chk}"
+                          Checked="Sched_Changed" Unchecked="Sched_Changed"/>
+                <Grid Margin="0,8,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock x:Name="SchedEveryLbl" Style="{StaticResource MutedTxt}"
+                             VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <ComboBox x:Name="SchedCmb" Grid.Column="1" Style="{StaticResource Cmb}"
+                            SelectionChanged="SchedCmb_Changed"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBd}" Margin="0,0,0,10">
+              <StackPanel>
+                <TextBlock x:Name="FgHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                <CheckBox x:Name="FgChk" Style="{StaticResource Chk}"
+                          Checked="Fg_Changed" Unchecked="Fg_Changed"/>
+                <TextBlock x:Name="FgHint" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                           Margin="0,8,0,6"/>
+                <TextBox x:Name="FgMapBox" Style="{StaticResource Inp}" AcceptsReturn="True"
+                         Height="64" VerticalScrollBarVisibility="Auto" LostFocus="FgMap_Save"/>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBd}" Margin="0,0,0,10">
+              <StackPanel>
+                <TextBlock x:Name="BackupHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="ExportBtn" Style="{StaticResource Btn}" Click="Export_Click" Margin="0,0,8,0"/>
+                  <Button x:Name="ImportBtn" Style="{StaticResource Btn}" Click="Import_Click"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBd}" Margin="0,0,0,10">
+              <StackPanel>
                 <TextBlock x:Name="AboutHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,9"/>
                 <TextBlock x:Name="AboutTxt" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"/>
                 <TextBlock x:Name="DiagTxt" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"

@@ -65,7 +65,7 @@ public sealed class OpenRgbProcessManager : IDisposable
     public bool IsRunning => _proc is { HasExited: false } || AttachedToExisting;
 
     /// <summary>Starts OpenRGB with our own token and waits until the SDK port accepts TCP.</summary>
-    public async Task StartAsync(TimeSpan? timeout = null)
+    public async Task StartAsync(TimeSpan? timeout = null, CancellationToken ct = default)
     {
         if (_proc is { HasExited: false }) return;
 
@@ -93,9 +93,11 @@ public sealed class OpenRgbProcessManager : IDisposable
         {
             if (Setup.EngineTask.Run(out var taskError))
             {
-                var taskDeadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(60));
-                while (DateTime.UtcNow < taskDeadline)
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var limit = timeout ?? TimeSpan.FromSeconds(60);
+                while (sw.Elapsed < limit)
                 {
+                    ct.ThrowIfCancellationRequested();
                     if (await PortOpenAsync().ConfigureAwait(false))
                     {
                         // We did not create the process object, and an elevated engine cannot be
@@ -104,7 +106,7 @@ public sealed class OpenRgbProcessManager : IDisposable
                         StartedViaTask = true;
                         return;
                     }
-                    await Task.Delay(500).ConfigureAwait(false);
+                    await Task.Delay(500, ct).ConfigureAwait(false);
                 }
                 TaskStartError = $"engine task started but port {Port} never opened";
             }
@@ -127,28 +129,54 @@ public sealed class OpenRgbProcessManager : IDisposable
 
         _proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start OpenRGB");
 
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(60));
-        while (DateTime.UtcNow < deadline)
+        var proc = _proc;
+        var deadlineSw = System.Diagnostics.Stopwatch.StartNew();
+        var waitLimit = timeout ?? TimeSpan.FromSeconds(60);
+        try
         {
-            _proc.Refresh();
-            if (_proc.HasExited)
-                throw new InvalidOperationException($"OpenRGB exited early (code {_proc.ExitCode}). See {LogDir()}.");
-            if (await PortOpenAsync().ConfigureAwait(false)) return;
-            await Task.Delay(500).ConfigureAwait(false);
+            while (deadlineSw.Elapsed < waitLimit)
+            {
+                ct.ThrowIfCancellationRequested();
+                proc.Refresh();
+                if (proc.HasExited)
+                    throw new InvalidOperationException($"OpenRGB exited early (code {proc.ExitCode}). See {LogDir()}.");
+                if (await PortOpenAsync().ConfigureAwait(false)) return;
+                await Task.Delay(500, ct).ConfigureAwait(false);
+            }
         }
+        catch
+        {
+            // Timeout / cancel / early exit: don't orphan the engine holding the port.
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            try { proc.Dispose(); } catch { }
+            if (ReferenceEquals(_proc, proc)) _proc = null;
+            throw;
+        }
+        try { if (!proc.HasExited) proc.Kill(true); } catch { }
+        try { proc.Dispose(); } catch { }
+        if (ReferenceEquals(_proc, proc)) _proc = null;
         throw new TimeoutException($"OpenRGB SDK port {Port} did not open within the timeout");
     }
 
     /// <summary>Restarts the engine after a crash: clears state, kills leftovers, starts fresh.</summary>
-    public async Task RestartAsync(TimeSpan? timeout = null)
+    public async Task RestartAsync(TimeSpan? timeout = null, CancellationToken ct = default)
     {
         Stop();
         AttachedToExisting = false;
         StartedViaTask = false;
         TaskStartError = null;
         KillOrphans();
-        await Task.Delay(600).ConfigureAwait(false);
-        await StartAsync(timeout).ConfigureAwait(false);
+        // Wait for the OLD server's port to actually close before starting a new one,
+        // otherwise StartAsync attaches to the dying engine (shutdown/startup race).
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!await PortOpenAsync().ConfigureAwait(false)) break;
+            await Task.Delay(200, ct).ConfigureAwait(false);
+        }
+        await Task.Delay(600, ct).ConfigureAwait(false);
+        await StartAsync(timeout, ct).ConfigureAwait(false);
     }
 
     public async Task<bool> PortOpenAsync()

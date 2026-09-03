@@ -200,7 +200,9 @@ public static class RenderTests
         // ---- 15. seed offsets EVERY animated effect (round 7: it used to affect rainbow only) ----
         foreach (var t in new[] { Effects.EffectType.Wave, Effects.EffectType.Blink,
                                   Effects.EffectType.Breathing, Effects.EffectType.Custom,
-                                  Effects.EffectType.Comet, Effects.EffectType.Fire })
+                                  Effects.EffectType.Comet, Effects.EffectType.Fire,
+                                  Effects.EffectType.Scanner, Effects.EffectType.Sparkle,
+                                  Effects.EffectType.Plasma })
         {
             var def = new Effects.EffectDef { Type = t, Speed = 0.5, Brightness = 1.0, SyncZones = false };
             var s0 = Effects.EffectRenderer.Render(def, 40, 0, ctx);
@@ -328,6 +330,283 @@ public static class RenderTests
         Check("parse: #RGB shorthand", shortHex.g == 255 && shortHex.r == 0);
         var dimmed = Effects.EffectRenderer.ParseHex("#FFFFFF", 0.5);
         Check("parse: brightness scales", dimmed.r is >= 126 and <= 129);
+
+        // ---- 24. music shapes: bar / mirror / pulse look different ----
+        var loudCtx = new Effects.EffectContext { Time = 1.0, AudioLevel = 0.7 };
+        var barFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "bar", Brightness = 1.0 };
+        var mirrorFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "mirror", Brightness = 1.0 };
+        var pulseFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "pulse", Brightness = 1.0 };
+        var barF = Effects.EffectRenderer.Render(barFx, 30, 0, loudCtx);
+        var mirrorF = Effects.EffectRenderer.Render(mirrorFx, 30, 0, loudCtx);
+        var pulseF = Effects.EffectRenderer.Render(pulseFx, 30, 0, loudCtx);
+        Check("music: bar and mirror differ", !barF.SequenceEqual(mirrorF));
+        Check("music: pulse differs from bar", !pulseF.SequenceEqual(barF));
+        bool mirrorSym = true;
+        for (int i = 0; i < 30; i++)
+            if (mirrorF[i * 3] != mirrorF[(29 - i) * 3] || mirrorF[i * 3 + 1] != mirrorF[(29 - i) * 3 + 1])
+            { mirrorSym = false; break; }
+        Check("music: mirror is symmetric", mirrorSym);
+        bool pulseUniform = true;
+        for (int i = 1; i < 30; i++)
+            if (pulseF[i * 3] != pulseF[0] || pulseF[i * 3 + 1] != pulseF[1] || pulseF[i * 3 + 2] != pulseF[2])
+            { pulseUniform = false; break; }
+        Check("music: pulse paints the whole strip one colour", pulseUniform);
+
+        // ---- 25. music colours: palette / level-ramp / background ----
+        var palFx = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.AudioVU, AudioColor = "palette",
+            CustomPixels = "#FF0000,#00FF00,#0000FF", Brightness = 1.0,
+        };
+        var palF = Effects.EffectRenderer.Render(palFx, 30, 0, loudCtx);
+        Check("music: palette mode differs from gradient", !palF.SequenceEqual(barF));
+        Check("music: palette mode uses the custom colours",
+              palF.Take(3).SequenceEqual(new byte[] { 255, 0, 0 }));
+        var lvlRampFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioColor = "level", Brightness = 1.0 };
+        var lvlF = Effects.EffectRenderer.Render(lvlRampFx, 30, 0, loudCtx);
+        Check("music: level-ramp differs from gradient", !lvlF.SequenceEqual(barF));
+        var bgFx = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.AudioVU, AudioBgHex = "#112233", Brightness = 1.0,
+        };
+        var quietCtx = new Effects.EffectContext { Time = 1.0, AudioLevel = 0.0 };
+        var bgF = Effects.EffectRenderer.Render(bgFx, 10, 0, quietCtx);
+        Check("music: silence shows the background, not black",
+              bgF[0] == 0x11 && bgF[1] == 0x22 && bgF[2] == 0x33);
+
+        // ---- 26. peak-hold: the dot lingers after the level drops ----
+        var st = new Effects.AudioState();
+        var hotCtx = new Effects.EffectContext { Time = 5.0, AudioLevel = 0.9 };
+        var pk1 = Effects.EffectRenderer.Render(
+            new Effects.EffectDef { Type = Effects.EffectType.AudioVU, PeakHold = true, Brightness = 1.0 },
+            30, 0, hotCtx, st);
+        int lastLit(byte[] fr)
+        {
+            int last = -1;
+            for (int i = 0; i < fr.Length / 3; i++)
+                if (fr[i * 3] != 0 || fr[i * 3 + 1] != 0 || fr[i * 3 + 2] != 0) last = i;
+            return last;
+        }
+        int hotEdge = lastLit(pk1);
+        var coldCtx = new Effects.EffectContext { Time = 5.0, AudioLevel = 0.25 };
+        var pk2 = Effects.EffectRenderer.Render(
+            new Effects.EffectDef { Type = Effects.EffectType.AudioVU, PeakHold = true, Brightness = 1.0 },
+            30, 0, coldCtx, st);
+        Check("music: peak dot holds past the live edge", lastLit(pk2) == hotEdge,
+              $"hot edge {hotEdge}, after drop {lastLit(pk2)}");
+
+        // ---- 27. spectrum: three bands, three segments ----
+        var specCtx = new Effects.EffectContext { Time = 2.0, AudioBass = 0.9, AudioMid = 0, AudioTreble = 0 };
+        var specFx = new Effects.EffectDef { Type = Effects.EffectType.Spectrum, Brightness = 1.0 };
+        var specF = Effects.EffectRenderer.Render(specFx, 30, 0, specCtx);
+        bool firstThirdLit = specF.Take(10 * 3).Any(v => v > 0);
+        bool restDark = specF.Skip(10 * 3).All(v => v == 0);
+        Check("spectrum: bass lights the first third only", firstThirdLit && restDark);
+        var specQuiet = Effects.EffectRenderer.Render(specFx, 30, 0,
+            new Effects.EffectContext { Time = 2.0 });
+        Check("spectrum: silence is black", specQuiet.All(v => v == 0));
+        var specTreble = Effects.EffectRenderer.Render(specFx, 30, 0,
+            new Effects.EffectContext { Time = 2.0, AudioTreble = 0.9 });
+        Check("spectrum: treble lights the last third",
+              specTreble.Take(20 * 3).All(v => v == 0) && specTreble.Skip(20 * 3).Any(v => v > 0));
+
+        // ---- 28. UsePalette reroutes the two-colour effects through CustomPixels ----
+        var waveGrad = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Wave, ColorHex = "#FF0000", Color2Hex = "#0000FF",
+            Brightness = 1.0, UsePalette = false,
+        };
+        var wavePal = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Wave, ColorHex = "#FF0000", Color2Hex = "#0000FF",
+            CustomPixels = "#00FF00,#00FF00", Brightness = 1.0, UsePalette = true,
+        };
+        var wg = Effects.EffectRenderer.Render(waveGrad, 30, 0, ctx);
+        var wp = Effects.EffectRenderer.Render(wavePal, 30, 0, ctx);
+        Check("palette: wave reroutes through CustomPixels", !wg.SequenceEqual(wp));
+        Check("palette: wave is all-green from a green palette",
+              wp[0] < 30 && wp[1] > 200 && wp[2] < 30);
+
+        // ---- 29. old settings without the new keys still render (null-tolerant defaults) ----
+        var legacy = System.Text.Json.JsonSerializer.Deserialize<Effects.EffectDef>(
+            """{"ColorHex":null,"Color2Hex":null,"Color3Hex":null,"AudioMode":null,"AudioColor":null,"AudioBgHex":null,"CustomPixels":null,"Direction":null,"AudioBand":null}""");
+        Check("compat: legacy json deserializes", legacy is not null);
+        legacy!.Normalized();
+        var legacyF = Effects.EffectRenderer.Render(legacy, 10, 0, ctx);
+        Check("compat: legacy defaults render", legacyF.Length == 30 && legacy.AudioMode == "bar");
+        Check("compat: clone keeps the new fields",
+              Effects.EffectEngine.Clone(new Effects.EffectDef { AudioMode = "mirror", PeakHold = false }).AudioMode == "mirror"
+              && !Effects.EffectEngine.Clone(new Effects.EffectDef { PeakHold = false }).PeakHold);
+
+        // ---- 30. dots meter + rainbow music colour + presets ----
+        var dotsFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "dots", Brightness = 1.0 };
+        var dotsF = Effects.EffectRenderer.Render(dotsFx, 30, 0, loudCtx);
+        Check("music: dots differs from bar", !dotsF.SequenceEqual(barF));
+        Check("music: dots lights only every 3rd LED",
+              dotsF.Take(3).Any(v => v > 0) && dotsF[3] == 0 && dotsF[4] == 0 && dotsF[5] == 0);
+        var rbFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioColor = "rainbow", Brightness = 1.0 };
+        var rbF = Effects.EffectRenderer.Render(rbFx, 30, 0, loudCtx);
+        Check("music: rainbow differs from gradient", !rbF.SequenceEqual(barF));
+        var rbF2 = Effects.EffectRenderer.Render(rbFx, 30, 0,
+            new Effects.EffectContext { Time = 3.0, AudioLevel = 0.7 });
+        Check("music: rainbow flows with time", !rbF.SequenceEqual(rbF2));
+        var presetFx = new Effects.EffectDef { Type = Effects.EffectType.Wave };
+        Effects.EffectPresets.Apply(presetFx, Effects.EffectPresets.All[0]);
+        Check("preset: applies 3 colours + palette",
+              presetFx.ColorHex == "#FF6B35" && presetFx.Color2Hex == "#FF2E63"
+              && presetFx.Color3Hex == "#FFD166" && presetFx.CustomPixels.Contains("FF6B35"));
+        Check("preset: 12 curated sets", Effects.EffectPresets.All.Length == 12);
+
+        // ---- 31. extra stops: Gradient samples boxes + extras as one ramp ----
+        var gx3 = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Gradient, ColorHex = "#FF0000", Color2Hex = "#0000FF",
+            ExtraColors = new List<string> { "#00FF00" }, Brightness = 1.0,
+        };
+        var gx3f = Effects.EffectRenderer.Render(gx3, 3, 0, ctx);
+        Check("extras: 3-stop gradient hits every stop",
+              gx3f[0] > 200 && gx3f[1] < 40 && gx3f[2] < 40
+              && gx3f[3] < 40 && gx3f[4] < 40 && gx3f[5] > 200
+              && gx3f[6] < 40 && gx3f[7] > 200 && gx3f[8] < 40,
+              $"({gx3f[0]},{gx3f[1]},{gx3f[2]}) ({gx3f[3]},{gx3f[4]},{gx3f[5]}) ({gx3f[6]},{gx3f[7]},{gx3f[8]})");
+        var gx2 = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Gradient, ColorHex = "#FF0000", Color2Hex = "#0000FF", Brightness = 1.0,
+        };
+        Check("extras: empty extras render exactly like the old 2-stop ramp",
+              Effects.EffectRenderer.Render(gx2, 30, 0, ctx)
+                  .SequenceEqual(Effects.EffectRenderer.Render(
+                      new Effects.EffectDef
+                      {
+                          Type = Effects.EffectType.Gradient, ColorHex = "#FF0000", Color2Hex = "#0000FF",
+                          ExtraColors = new List<string>(), Brightness = 1.0,
+                      }, 30, 0, ctx)));
+        var blinkX = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Blink, ColorHex = "#FF0000",
+            ExtraColors = new List<string> { "#00FF00" }, Speed = 0.5, Brightness = 1.0,
+        };
+        var blinkXf = Effects.EffectRenderer.Render(blinkX, 5, 0,
+            new Effects.EffectContext { Time = 4.5 });
+        Check("extras: blink steps into the extra colour",
+              blinkXf[0] < 40 && blinkXf[1] > 200 && blinkXf[2] < 40,
+              $"({blinkXf[0]},{blinkXf[1]},{blinkXf[2]})");
+        var dirty = new Effects.EffectDef
+        {
+            ExtraColors = new List<string> { "notacolor", "#00FF00", "ABC", "#00FF00", "#00FF00", "#00FF00", "#00FF00", "#00FF00", "#00FF00", "#00FF00" },
+        };
+        dirty.Normalized();
+        Check("extras: invalid dropped, capped at 8 with # prefix",
+              dirty.ExtraColors.Count == 8 && dirty.ExtraColors[0] == "#00FF00" && dirty.ExtraColors[1] == "#ABC");
+        var withX = new Effects.EffectDef { ExtraColors = new List<string> { "#00FF00" } };
+        Effects.EffectPresets.Apply(withX, Effects.EffectPresets.All[0]);
+        Check("preset: clears stale extras", withX.ExtraColors.Count == 0);
+        var cloned = Effects.EffectEngine.Clone(new Effects.EffectDef { ExtraColors = new List<string> { "#00FF00" } });
+        Check("extras: clone keeps values", cloned.ExtraColors.SequenceEqual(new[] { "#00FF00" }));
+        cloned.ExtraColors.Add("#FF0000");
+        var orig = new Effects.EffectDef { ExtraColors = new List<string> { "#00FF00" } };
+        var cloned2 = Effects.EffectEngine.Clone(orig);
+        cloned2.ExtraColors.Add("#FF0000");
+        Check("extras: clone is a copy, not shared", orig.ExtraColors.Count == 1);
+
+        // ---- 32. music sensitivity: gain boosts quiet signals, 0.2 floor keeps gate sane ----
+        var quiet = new Effects.EffectContext { Time = 1.0, AudioLevel = 0.15 };
+        var g1 = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioGain = 1.0, Brightness = 1.0 };
+        var g2 = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioGain = 2.5, Brightness = 1.0 };
+        int litCount(byte[] fr)
+        {
+            int n = 0;
+            for (int i = 0; i < fr.Length / 3; i++)
+                if (fr[i * 3] != 0 || fr[i * 3 + 1] != 0 || fr[i * 3 + 2] != 0) n++;
+            return n;
+        }
+        Check("gain: higher sensitivity lights more LEDs",
+              litCount(Effects.EffectRenderer.Render(g2, 30, 0, quiet))
+              > litCount(Effects.EffectRenderer.Render(g1, 30, 0, quiet)));
+        var gLow = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioGain = -5, Brightness = 1.0 };
+        gLow.Normalized();
+        Check("gain: clamped to 0.2..2.5", Math.Abs(gLow.AudioGain - 0.2) < 1e-9);
+        var gHigh = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioGain = 99, Brightness = 1.0 };
+        gHigh.Normalized();
+        Check("gain: clamped at top", Math.Abs(gHigh.AudioGain - 2.5) < 1e-9);
+
+        // ---- 33. beat flash: white overlay on kicks, off by default ----
+        var beatCtx = new Effects.EffectContext { Time = 1.0, AudioLevel = 0.6, Beat = 1.0 };
+        var noBeat = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, BeatStrength = 0, Brightness = 1.0 };
+        var yesBeat = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, BeatStrength = 1.0, Brightness = 1.0 };
+        var bf0 = Effects.EffectRenderer.Render(noBeat, 10, 0, beatCtx);
+        var bf1 = Effects.EffectRenderer.Render(yesBeat, 10, 0, beatCtx);
+        Check("beat: strength 0 leaves the frame untouched",
+              bf0.SequenceEqual(Effects.EffectRenderer.Render(
+                  new Effects.EffectDef { Type = Effects.EffectType.AudioVU, Brightness = 1.0 }, 10, 0,
+                  new Effects.EffectContext { Time = 1.0, AudioLevel = 0.6 })));
+        Check("beat: full beat whitens the frame",
+              bf1.All(v => v == 255));
+        var halfBeat = Effects.EffectRenderer.Render(yesBeat, 10, 0,
+            new Effects.EffectContext { Time = 1.0, AudioLevel = 0.6, Beat = 0.0 });
+        Check("beat: no kick means no flash", halfBeat.SequenceEqual(bf0));
+        var badBeat = new Effects.EffectDef { BeatStrength = 5 };
+        badBeat.Normalized();
+        Check("beat: clamped to 0..1", Math.Abs(badBeat.BeatStrength - 1.0) < 1e-9);
+
+        // ---- 34. scheduler rotation order ----
+        Check("sched: rotates forward",
+              MainWindow.SchedulerNextIndex(new List<string> { "A", "B", "C" }, "A") == 1);
+        Check("sched: wraps around",
+              MainWindow.SchedulerNextIndex(new List<string> { "A", "B", "C" }, "C") == 0);
+        Check("sched: unknown active starts at 0",
+              MainWindow.SchedulerNextIndex(new List<string> { "A", "B" }, "gone") == 0);
+        Check("sched: single profile never rotates",
+              MainWindow.SchedulerNextIndex(new List<string> { "A" }, "A") == -1);
+
+        // ---- 35. per-app map parsing + matching ----
+        var fmap = ForegroundWatcher.ParseMap("game.exe=Play\n# comment\n\nbadline\ngame.exe=Late\nAPP.EXE=Work");
+        Check("fg: last wins, comments/blanks/bad lines ignored",
+              fmap.Count == 2 && fmap["game.exe"] == "Late" && fmap["app.exe"] == "Work");
+        Check("fg: matches exe case-insensitively with a known profile",
+              ForegroundWatcher.MatchProfile(fmap, "GAME.EXE", new[] { "Late", "Work" }) == "Late");
+        Check("fg: unknown exe gives null",
+              ForegroundWatcher.MatchProfile(fmap, "other.exe", new[] { "Late" }) is null);
+        Check("fg: unknown profile gives null",
+              ForegroundWatcher.MatchProfile(
+                  new Dictionary<string, string> { ["x.exe"] = "Ghost" }, "x.exe", new[] { "Late" }) is null);
+
+        // ---- 36. per-zone calibration beats device calibration ----
+        var zcdev = new SDK.RgbController { Index = 0, Name = "Dev", Location = "usb-1" };
+        var zczone = new SDK.RgbZone { Index = 1, LedsMin = 0, LedsMax = 10, LedsCount = 10 };
+        var zcprof = new Config.Profile();
+        zcprof.Calibrations[zcdev.Key] = new Config.Calibration { RGain = 0.5, GGain = 1, BGain = 1, Gamma = 1 };
+        zcprof.ZoneCalibrations[Config.Profile.ZoneKey(zcdev, zczone)] =
+            new Config.Calibration { RGain = 1, GGain = 0.25, BGain = 1, Gamma = 1 };
+        var zbuf = new byte[] { 200, 200, 200 };
+        zcprof.CalibrationFor(zcdev, zczone).Apply(zbuf);
+        Check("zonecal: zone entry wins over device", zbuf[0] == 200 && zbuf[1] == 50,
+              $"({zbuf[0]},{zbuf[1]},{zbuf[2]})");
+        zcprof.ZoneCalibrations.Clear();
+        var zbuf2 = new byte[] { 200, 200, 200 };
+        zcprof.CalibrationFor(zcdev, zczone).Apply(zbuf2);
+        Check("zonecal: falls back to device", zbuf2[0] == 100 && zbuf2[1] == 200);
+        zcprof.ZoneCalibrations["Ghost@usb-9|3"] = new Config.Calibration();
+        zcprof.PruneTo(new[] { zcdev });
+        Check("zonecal: stale zone entries pruned", !zcprof.ZoneCalibrations.ContainsKey("Ghost@usb-9|3"));
+        var zsrc = new Config.Profile();
+        zsrc.ZoneCalibrations["K@l|0"] = new Config.Calibration { RGain = 0.5, GGain = 1, BGain = 1, Gamma = 1 };
+        var zclone = Effects.EffectEngine.Clone(zsrc);
+        Check("zonecal: clone keeps zone entries",
+              zclone.ZoneCalibrations.Count == 1 && Math.Abs(zclone.ZoneCalibrations["K@l|0"].RGain - 0.5) < 1e-9);
+
+        // ---- 37. settings backup rotation in a temp dir ----
+        string tmpBk = Path.Combine(Path.GetTempPath(), "fullrgb-test-" + Guid.NewGuid().ToString("N"));
+        string tmpSettings = Path.Combine(tmpBk, "settings.json");
+        string tmpBackups = Path.Combine(tmpBk, "backups");
+        Directory.CreateDirectory(tmpBackups);
+        File.WriteAllText(tmpSettings, "{}");
+        for (int i = 0; i < 10; i++) // pre-aged fakes sort below the real timestamped name
+            File.WriteAllText(Path.Combine(tmpBackups, $"settings-00{i}.json"), "{}");
+        Config.ProfileStore.BackupLatestTo(tmpSettings, tmpBackups, 7);
+        int bkCount = Directory.GetFiles(tmpBackups).Length;
+        Check("backup: capped at 7", bkCount == 7, $"count {bkCount}");
+        try { Directory.Delete(tmpBk, true); } catch { }
 
         Console.WriteLine(failed == 0 ? "\nALL RENDER TESTS PASSED" : $"\n{failed} TEST(S) FAILED");
         return failed == 0 ? 0 : 1;

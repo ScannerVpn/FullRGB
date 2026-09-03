@@ -13,6 +13,7 @@ using FontFamily = System.Windows.Media.FontFamily;
 using FlowDirection = System.Windows.FlowDirection;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using MouseButtonState = System.Windows.Input.MouseButtonState;
+using Cursors = System.Windows.Input.Cursors;
 
 namespace FullRGB;
 
@@ -75,14 +76,17 @@ public sealed class PromptDialog : Window
         buttons.Children.Add(ok);
 
         var body = new StackPanel();
-        body.Children.Add(new TextBlock
+        var titleBlock = new TextBlock
         {
             Text = title,
             Style = (Style)Application.Current.FindResource("Txt"),
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 12),
             TextWrapping = TextWrapping.Wrap,
-        });
+            Cursor = Cursors.SizeAll, // drag handle (window-level DragMove would eat field clicks)
+        };
+        titleBlock.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        body.Children.Add(titleBlock);
         body.Children.Add(_input);
         body.Children.Add(buttons);
 
@@ -102,7 +106,6 @@ public sealed class PromptDialog : Window
         };
 
         Loaded += (_, _) => { _input.Focus(); _input.SelectAll(); };
-        MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
     }
 
     /// <summary>Returns the entered text, or null when cancelled/empty.</summary>
@@ -156,13 +159,16 @@ public static class ConfirmDialog
         buttons.Children.Add(ok);
 
         var body = new StackPanel();
-        body.Children.Add(new TextBlock
+        var msgBlock = new TextBlock
         {
             Text = message,
             Style = (Style)Application.Current.FindResource("Txt"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 16),
-        });
+            Cursor = Cursors.SizeAll, // drag handle (window-level DragMove would eat button clicks)
+        };
+        msgBlock.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
+        body.Children.Add(msgBlock);
         body.Children.Add(buttons);
 
         win.Content = new Border
@@ -177,9 +183,8 @@ public static class ConfirmDialog
             {
                 BlurRadius = 28, ShadowDepth = 6, Opacity = 0.5, Color = Colors.Black,
             },
-            Child = body,
-        };
-        win.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
-        return win.ShowDialog() == true;
+             Child = body,
+         };
+         return win.ShowDialog() == true;
     }
 }

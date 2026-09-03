@@ -189,13 +189,17 @@ public sealed class ColorPickerDialog : Window
         buttons.Children.Add(ok);
 
         var body = new StackPanel { Width = FieldW };
-        body.Children.Add(new TextBlock
+        var title = new TextBlock
         {
             Text = L10n.T("dlg.pickColor"),
             Style = (Style)Application.Current.FindResource("Txt"),
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 12),
-        });
+            Cursor = Cursors.SizeAll, // drag handle: DragMove lives here ONLY, so clicks on the
+                                      // field/hue/swatches below are never hijacked into a window drag
+        };
+        title.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        body.Children.Add(title);
         body.Children.Add(fieldFrame);
         body.Children.Add(hueHost);
         body.Children.Add(hexRow);
@@ -212,13 +216,12 @@ public sealed class ColorPickerDialog : Window
             Margin = new Thickness(12),
             Effect = new System.Windows.Media.Effects.DropShadowEffect
             { BlurRadius = 30, ShadowDepth = 6, Opacity = 0.55, Color = Colors.Black },
-            Child = body,
-        };
-        MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+             Child = body,
+         };
 
-        DrawHue();
-        Redraw();
-    }
+         DrawHue();
+         Redraw();
+     }
 
     private static ControlTemplate SwatchTemplate(Color c)
     {

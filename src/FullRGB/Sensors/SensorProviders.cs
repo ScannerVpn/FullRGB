@@ -85,7 +85,7 @@ public sealed class AudioProvider : IDisposable
 
     private NAudio.Wave.WasapiLoopbackCapture? _capture;
     private readonly object _lock = new();
-    private double _level, _bass, _mid, _treble;
+    private double _level, _bass, _mid, _treble, _beat;
 
     private readonly double[] _mono = new double[FftSize];
     private readonly double[] _re = new double[FftSize];
@@ -98,6 +98,8 @@ public sealed class AudioProvider : IDisposable
     public double Bass { get { lock (_lock) return _bass; } }
     public double Mid { get { lock (_lock) return _mid; } }
     public double Treble { get { lock (_lock) return _treble; } }
+    /// <summary>Kick-drum onset envelope 0..1: jumps to 1 on a bass hit, then falls fast.</summary>
+    public double Beat { get { lock (_lock) return _beat; } }
 
     /// <summary>Null until capture starts; used by the UI to explain a silent music effect.</summary>
     public string? LastError { get; private set; }
@@ -166,8 +168,13 @@ public sealed class AudioProvider : IDisposable
         }
 
         double rms = Math.Sqrt(sumSq / sampleCount);
+        // Fast attack + slow release: beats must punch instantly, then fall smoothly.
+        // The old symmetric blend smeared kick drums into a blurry glow that felt off-beat.
+        double target = Math.Clamp(rms * 4.0, 0, 1);
         lock (_lock)
-            _level = _level * 0.6 + Math.Clamp(rms * 4.0, 0, 1) * 0.4;
+            _level = target > _level
+                ? _level * 0.5 + target * 0.5
+                : _level * 0.85 + target * 0.15;
     }
 
     private static double ReadSample(byte[] buf, int off, int bytesPerSample, bool isFloat) => bytesPerSample switch
@@ -205,9 +212,13 @@ public sealed class AudioProvider : IDisposable
         double nb = B(bass, nB, 90), nm = B(mid, nM, 220), nt = B(treble, nT, 420);
         lock (_lock)
         {
-            _bass = _bass * 0.55 + nb * 0.45;
-            _mid = _mid * 0.55 + nm * 0.45;
-            _treble = _treble * 0.55 + nt * 0.45;
+            // same fast-attack / slow-release envelope as the overall level
+            _bass = nb > _bass ? _bass * 0.5 + nb * 0.5 : _bass * 0.85 + nb * 0.15;
+            _mid = nm > _mid ? _mid * 0.5 + nm * 0.5 : _mid * 0.85 + nm * 0.15;
+            _treble = nt > _treble ? _treble * 0.5 + nt * 0.5 : _treble * 0.85 + nt * 0.15;
+            // kick onset: instantaneous bass far above its smoothed self = a hit
+            if (nb > 0.25 && nb > _bass * 1.35 + 0.08) _beat = 1.0;
+            else _beat *= 0.78; // ~90 ms falloff at the ~21 ms analysis rate
         }
     }
 

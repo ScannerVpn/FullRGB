@@ -41,6 +41,7 @@ public sealed class TrayController : IDisposable
             // dark menu so it matches the app instead of the default grey WinForms strip
             RenderMode = ToolStripRenderMode.System,
             ShowImageMargin = false,
+            RightToLeft = L10n.IsRtl ? RightToLeft.Yes : RightToLeft.No,
         };
         BuildMenu();
 
@@ -90,9 +91,13 @@ public sealed class TrayController : IDisposable
 
     private void BuildMenu()
     {
+        // Dispose old items: Sync() clears DropDownItems on every right-click, leaking handles.
+        foreach (System.Windows.Forms.ToolStripItem it in _menu.Items)
+            try { it.Dispose(); } catch { }
         _menu.Items.Clear();
+        _menu.RightToLeft = L10n.IsRtl ? RightToLeft.Yes : RightToLeft.No;
 
-        var header = new ToolStripMenuItem("FullRGB") { Enabled = false };
+        var header = new ToolStripMenuItem(L10n.T("tray.title")) { Enabled = false };
         _menu.Items.Add(header);
         _menu.Items.Add(new ToolStripSeparator());
 
@@ -129,6 +134,8 @@ public sealed class TrayController : IDisposable
         bool running = IsEffectsRunning?.Invoke() ?? false;
         _toggleItem.Text = running ? L10n.T("btn.stopEffects") : L10n.T("btn.startEffects");
 
+        foreach (System.Windows.Forms.ToolStripItem it in _profilesItem.DropDownItems)
+            try { it.Dispose(); } catch { }
         _profilesItem.DropDownItems.Clear();
         var names = ProfileNames?.Invoke()?.ToList() ?? new List<string>();
         var active = ActiveProfile?.Invoke();
@@ -164,10 +171,23 @@ public sealed class TrayController : IDisposable
         _win.Topmost = false;
     }
 
+    private bool _disposed;
+
     public void Dispose()
     {
-        _icon.Visible = false;
-        _icon.Dispose();
-        _menu.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+        try
+        {
+            _menu.Opening -= (_, _) => Sync();
+            _icon.DoubleClick -= (_, _) => Restore();
+        }
+        catch { }
+        Icon? icon = null;
+        try { icon = _icon.Icon; } catch { }
+        try { _icon.Visible = false; } catch { }
+        try { _icon.Dispose(); } catch { }
+        try { icon?.Dispose(); } catch { }
+        try { _menu.Dispose(); } catch { }
     }
 }

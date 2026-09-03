@@ -82,22 +82,34 @@ public static class DependencyManager
 
     public static bool IsPawnIoInstalled()
     {
-        // 1) driver service registered?
+        // 1) driver service registered AND not disabled?
         try
         {
             using var key = Microsoft.Win32.Registry.LocalMachine
                 .OpenSubKey(@"SYSTEM\CurrentControlSet\Services\PawnIO");
-            if (key is not null) return true;
+            if (key is not null)
+            {
+                // Start: 0=boot 1=system 2=auto 3=demand 4=disabled. Disabled = not usable.
+                var start = key.GetValue("Start");
+                if (start is int s && s == 4) return false;
+                return true;
+            }
         }
         catch { }
-        // 2) files shipped by the installer
+        // 2) files shipped by the installer (with a version sanity check so a leftover
+        // zero-byte file from a failed install doesn't count).
         foreach (var p in new[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PawnIO", "PawnIOLib.dll"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "drivers", "PawnIO.sys"),
         })
         {
-            if (File.Exists(p)) return true;
+            try
+            {
+                var fi = new FileInfo(p);
+                if (fi.Exists && fi.Length > 1024) return true;
+            }
+            catch { }
         }
         return false;
     }
@@ -106,11 +118,18 @@ public static class DependencyManager
 
     /// <summary>
     /// Downloads (with progress) and silently installs one dependency.
-    /// Progress callbacks are raised on the calling thread's continuation context.
+    /// Progress callbacks are marshalled back to the caller's SynchronizationContext
+    /// (UI thread) when one exists; otherwise they run inline.
     /// </summary>
     public static async Task<bool> InstallAsync(Dependency dep, DependencyProgress progress,
                                                 Action<DependencyProgress> report, CancellationToken ct = default)
     {
+        var sync = SynchronizationContext.Current;
+        void Report(DependencyProgress p)
+        {
+            if (sync is not null) sync.Post(_ => { try { report(p); } catch { } }, null);
+            else { try { report(p); } catch { } }
+        }
         try
         {
             Directory.CreateDirectory(CacheDir);
@@ -119,11 +138,19 @@ public static class DependencyManager
             progress.State = DependencyState.Installing;
             progress.Stage = "download";
             progress.Percent = -1;
-            report(progress);
+            Report(progress);
 
             using (var resp = await Http.GetAsync(dep.Url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
             {
-                resp.EnsureSuccessStatusCode();
+                try { resp.EnsureSuccessStatusCode(); }
+                catch (HttpRequestException e)
+                {
+                    progress.State = DependencyState.Failed;
+                    progress.Stage = "download-failed";
+                    progress.Error = $"download failed ({(int?)resp.StatusCode} {resp.StatusCode}): {dep.Url} — the pinned release may have moved; {e.Message}";
+                    Report(progress);
+                    return false;
+                }
                 long total = resp.Content.Headers.ContentLength ?? -1;
                 progress.BytesTotal = total;
 
@@ -133,20 +160,29 @@ public static class DependencyManager
                 long received = 0;
                 int read;
                 var lastReport = DateTime.UtcNow;
-                while ((read = await src.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                try
                 {
-                    await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                    received += read;
-                    progress.BytesReceived = received;
-                    progress.Percent = total > 0 ? received * 100.0 / total : -1;
-                    if ((DateTime.UtcNow - lastReport).TotalMilliseconds > 100)
+                    while ((read = await src.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
                     {
-                        report(progress);
-                        lastReport = DateTime.UtcNow;
+                        await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                        received += read;
+                        progress.BytesReceived = received;
+                        progress.Percent = total > 0 ? received * 100.0 / total : -1;
+                        if ((DateTime.UtcNow - lastReport).TotalMilliseconds > 100)
+                        {
+                            Report(progress);
+                            lastReport = DateTime.UtcNow;
+                        }
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    try { dst.Close(); } catch { }
+                    try { if (File.Exists(target)) File.Delete(target); } catch { }
+                    throw;
+                }
                 progress.Percent = 100;
-                report(progress);
+                Report(progress);
             }
 
             if (dep.Sha256.Length > 0 && !VerifySha256(target, dep.Sha256))
@@ -154,41 +190,57 @@ public static class DependencyManager
                 progress.State = DependencyState.Failed;
                 progress.Stage = "checksum-mismatch";
                 progress.Error = "downloaded file failed SHA-256 verification";
-                report(progress);
+                Report(progress);
+                try { if (File.Exists(target)) File.Delete(target); } catch { }
                 return false;
             }
 
             progress.Stage = "install";
             progress.Percent = -1;
-            report(progress);
+            Report(progress);
 
+            // NOTE: UseShellExecute=true (needed for the runas verb) does NOT support
+            // ArgumentList — it throws / ignores args. Build a quoted Arguments string instead.
+            // Verb must be omitted (not "") when already elevated: "" is invalid.
             var psi = new ProcessStartInfo
             {
                 FileName = target,
+                Arguments = string.Join(' ', dep.SilentArgs.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
                 UseShellExecute = true,
-                Verb = SDK.Elevation.IsElevated ? "" : "runas",
+                CreateNoWindow = true,
             };
-            foreach (var a in dep.SilentArgs) psi.ArgumentList.Add(a);
+            if (!SDK.Elevation.IsElevated) psi.Verb = "runas";
 
             using var proc = Process.Start(psi);
             if (proc is null) throw new InvalidOperationException("installer did not start");
-            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            try { await proc.WaitForExitAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(true); } catch { }
+                throw;
+            }
 
-            // Installer exit codes vary; trust the detector instead.
-            await Task.Delay(1500, ct).ConfigureAwait(false);
-            bool ok = dep.IsInstalled();
+            // Slow driver registration: poll the detector instead of trusting one 1.5s check.
+            bool ok = false;
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (dep.IsInstalled()) { ok = true; break; }
+                await Task.Delay(1000, ct).ConfigureAwait(false);
+            }
             progress.State = ok ? DependencyState.Installed : DependencyState.Failed;
             progress.Stage = ok ? "done" : "verify-failed";
             progress.Percent = 100;
             if (!ok) progress.Error = $"installer exited with code {proc.ExitCode} but the driver was not detected";
-            report(progress);
+            Report(progress);
             return ok;
         }
         catch (OperationCanceledException)
         {
             progress.State = DependencyState.Failed;
             progress.Stage = "cancelled";
-            report(progress);
+            Report(progress);
             return false;
         }
         catch (Exception e)
@@ -196,7 +248,7 @@ public static class DependencyManager
             progress.State = DependencyState.Failed;
             progress.Stage = "error";
             progress.Error = e.Message;
-            report(progress);
+            Report(progress);
             return false;
         }
     }
