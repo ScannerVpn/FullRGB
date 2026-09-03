@@ -91,8 +91,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ inputs.tag }}"
-          if (-not (gh release view $tag 2>$null)) {
-            gh release create $tag --title "FullRGB $tag" --notes "Automated build from $env:GITHUB_SHA" --draft
+          # gh writes to stderr and returns non-zero when the release is absent; check the exit
+          # code explicitly instead of testing the (empty) stdout, which is always falsy here.
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "FullRGB $tag" `
+              --notes "Automated build from commit $env:GITHUB_SHA" --draft
           }
+          # Uploading from inside GitHub's network: the 84 MB asset never crosses a home uplink.
           gh release upload $tag dist/FullRGB.exe dist/FullRGB.exe.sha256 --clobber
           gh release edit $tag --draft=false
+          gh release view $tag --json isDraft,assets
