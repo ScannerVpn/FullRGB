@@ -57,9 +57,16 @@ jobs:
                    -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
             if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {}; throw "gate timed out: $mode" }
             if ($p.ExitCode -ne 0) { throw "gate exit code $($p.ExitCode): $mode" }
-            # Test output is UTF-16LE from a WinExe; decode explicitly (Get-Content -Raw
-            # without -Encoding Unicode mangles it on some runners).
-            $text = Get-Content $out -Raw -Encoding Unicode
+            # A GUI-subsystem exe inherits the console code page for redirected stdout, which
+            # differs per machine (UTF-16LE here UTF-8 there): detect it from NUL density
+            # instead of assuming one encoding. A fixed -Encoding breaks one side or the other.
+            $bytes = [System.IO.File]::ReadAllBytes($out)
+            $nul = ($bytes | Where-Object { $_ -eq 0 }).Count
+            if ($bytes.Length -gt 4 -and $nul * 4 -gt $bytes.Length) {
+              $text = [System.Text.Encoding]::Unicode.GetString($bytes)
+            } else {
+              $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+            }
             Write-Host $text
             $want = if ($mode -eq '--rendertest') { 'ALL RENDER TESTS PASSED' } else { 'ALL UI TESTS PASSED' }
             if ($text -notmatch [regex]::Escape($want)) { throw "gate failed: $mode (missing '$want')" }
