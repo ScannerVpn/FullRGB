@@ -218,7 +218,7 @@ exit 0
     /// Writes the script to a temp file and runs it via `powershell -File` with the runas verb.
     /// A temp FILE (not -Command) keeps quoting out of the picture entirely.
     /// </summary>
-    private static bool RunElevatedScript(string script, out string error)
+    internal static bool RunElevatedScript(string script, out string error)
     {
         error = "";
         string path = Path.Combine(Path.GetTempPath(), $"fullrgb-task-{Guid.NewGuid():N}.ps1");

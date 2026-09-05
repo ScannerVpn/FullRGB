@@ -111,6 +111,30 @@ public partial class App : Application
             return;
         }
 
+        // --autostart=status|ensure: headless check/repair of the logon task.
+        var autoArg = e.Args.FirstOrDefault(a => a.StartsWith("--autostart", StringComparison.OrdinalIgnoreCase));
+        if (autoArg is not null)
+        {
+            _headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            string verb = autoArg.Contains('=') ? autoArg.Split('=')[1].ToLowerInvariant() : "status";
+            var settings = ProfileStore.Load();
+            string args = settings.StartMinimized ? "--minimized" : "";
+            int code = 0;
+            if (verb == "ensure")
+            {
+                bool ok = Autostart.EnsureCurrent(args, out string ensureErr);
+                Console.WriteLine($"ensure: {(ok ? "OK" : "FAILED " + ensureErr)}");
+                if (!ok) code = 1;
+            }
+            Console.WriteLine($"registered={Autostart.RegisteredExePath() is not null} " +
+                              $"matchesCurrent={Autostart.MatchesCurrent()} " +
+                              $"taskExe={Autostart.RegisteredExePath() ?? "-"} " +
+                              $"exe={Environment.ProcessPath}");
+            Shutdown(code);
+            return;
+        }
+
         // --usbscan: list every present USB/HID device with its VID:PID and the product string the
         // DEVICE reports. Used to answer "why isn't my mouse in the list?" with evidence.
         if (e.Args.Any(a => a.Equals("--usbscan", StringComparison.OrdinalIgnoreCase)))
@@ -159,6 +183,21 @@ public partial class App : Application
         StartupWindow.StartupWarning = ProfileStore.LastLoadError;
         L10n.Set(Settings.Language);
         Theme.ApplyAccent(Settings.AccentHex);
+
+        // Self-heal the logon task: it stores an ABSOLUTE exe path, so running from a new
+        // folder (every dist build) left it aiming at a deleted exe and autostart silently
+        // died with 0x80070002. Rewrite it to this exe; own-user task, no UAC, best-effort.
+        if (Settings.StartWithWindows)
+        {
+            try
+            {
+                if (!Autostart.EnsureCurrent(Settings.StartMinimized ? "--minimized" : ""))
+                    StartupWindow.StartupWarning = string.Join("\n",
+                        new[] { StartupWindow.StartupWarning, L10n.T("status.failed", "autostart task") }
+                        .Where(s => !string.IsNullOrEmpty(s)));
+            }
+            catch { }
+        }
 
         var startup = new StartupWindow();
         startup.ShowDialog();

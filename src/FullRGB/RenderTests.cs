@@ -149,13 +149,18 @@ public static class RenderTests
         Check("settings: corrupt falls back", corrupt.Language == "en");
         try { Directory.Delete(sdir, true); } catch { }
 
-        // ---- 12. autostart command ----
-        string create = Autostart.BuildCommand(true, @"C:\Program Files\FullRGB\FullRGB.exe", "--minimized");
-        Check("autostart: create quotes exe", create.Contains("\\\"C:\\Program Files\\FullRGB\\FullRGB.exe\\\" --minimized"));
-        Check("autostart: runs unelevated (no /RL HIGHEST)",
-              create.Contains("/RL LIMITED") && !create.Contains("HIGHEST"));
-        string del = Autostart.BuildCommand(false, "x", "");
-        Check("autostart: delete command", del.Contains("/Delete"));
+        // ---- 12. autostart task script (ScheduledTasks module: schtasks /Create mis-splits
+        // /TR at the first space even when quoted, so spaced folders registered Command=`G:\Ai\RGB`)
+        string create = Autostart.BuildRegisterScript(@"C:\Program Files\FullRGB\FullRGB.exe", "--minimized");
+        Check("autostart: -Execute carries the full spaced path",
+              create.Contains("-Execute 'C:\\Program Files\\FullRGB\\FullRGB.exe'"));
+        Check("autostart: args are a separate -Argument field",
+              create.Contains("-Argument '--minimized'"));
+        Check("autostart: runs unelevated (Limited, never Highest)",
+              create.Contains("-RunLevel Limited") && !create.Contains("Highest"));
+        Check("autostart: logon trigger for the user", create.Contains("-AtLogOn"));
+        string del = Autostart.BuildUnregisterScript();
+        Check("autostart: delete script", del.Contains("Unregister-ScheduledTask"));
 
         // ---- 12b. elevated ENGINE task (this is what makes RGB RAM work) ----
         // Proven on this rig from the engine log: unelevated -> "Permission Denied, PawnIO
@@ -607,6 +612,26 @@ public static class RenderTests
         int bkCount = Directory.GetFiles(tmpBackups).Length;
         Check("backup: capped at 7", bkCount == 7, $"count {bkCount}");
         try { Directory.Delete(tmpBk, true); } catch { }
+
+        // ---- 38. autostart script: quoting, level, stale-path detection ----
+        string ascript = Autostart.BuildRegisterScript(@"G:\Ai\RGB Control\dist16\FullRGB.exe", "--minimized");
+        Check("autostart: runs limited (never highest)",
+              ascript.Contains("-RunLevel Limited") && !ascript.Contains("Highest"));
+        Check("autostart: spaced exe intact in -Execute",
+              ascript.Contains("-Execute 'G:\\Ai\\RGB Control\\dist16\\FullRGB.exe'"));
+        Check("autostart: args in their own field",
+              ascript.Contains("-Argument '--minimized'"));
+        string ascriptBare = Autostart.BuildRegisterScript(@"C:\FullRGB.exe", "");
+        Check("autostart: empty args omit -Argument",
+              !ascriptBare.Contains("-Argument"));
+        string staleXml = "<Task><Actions><Exec><Command>\"G:\\Ai\\RGB Control\\dist5\\FullRGB.exe\"</Command>" +
+                          "<Arguments>--minimized</Arguments></Exec></Actions></Task>";
+        string? parsed = Setup.EngineTask.ParseCommand(staleXml);
+        Check("autostart: stale path parsed for comparison",
+              parsed == @"G:\Ai\RGB Control\dist5\FullRGB.exe");
+        Check("autostart: dist5 != dist16 detected as stale",
+              !string.Equals(parsed, @"G:\Ai\RGB Control\dist16\FullRGB.exe",
+                             StringComparison.OrdinalIgnoreCase));
 
         Console.WriteLine(failed == 0 ? "\nALL RENDER TESTS PASSED" : $"\n{failed} TEST(S) FAILED");
         return failed == 0 ? 0 : 1;

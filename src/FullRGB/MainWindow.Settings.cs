@@ -688,27 +688,174 @@ internal static class ForegroundWatcher
 public static class Autostart
 {
     private const string TaskName = "FullRGB";
-
-    public static string BuildCommand(bool enable, string exe, string args)
-        => enable
-            ? $"/Create /F /TN {TaskName} /SC ONLOGON /RL LIMITED /TR \"\\\"{exe}\\\""
-                + (string.IsNullOrWhiteSpace(args) ? "\"" : $" {args.Trim()}\"")
-            : $"/Delete /F /TN {TaskName}";
-
-    public static bool Set(bool enable, string args)
+    /// <summary>
+    /// PowerShell that (re)creates the logon task via the ScheduledTasks module — NOT
+    /// `schtasks /Create`: schtasks splits its /TR value at the first space even when quoted,
+    /// so any exe under a spaced folder ("RGB Control") registered as Command=`G:\Ai\RGB`
+    /// and never ran. Separate -Execute/-Argument fields have no such parsing.
+    /// </summary>
+    public static string BuildRegisterScript(string exePath, string args)
     {
+        string dir = System.IO.Path.GetDirectoryName(exePath) ?? "";
+        if (string.IsNullOrWhiteSpace(dir)) dir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string Q(string s) => "'" + s.Replace("'", "''") + "'";
+        string user = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("USERDOMAIN"))
+            ? Environment.UserName
+            : Environment.GetEnvironmentVariable("USERDOMAIN") + "\\" + Environment.UserName;
+        string argLine = string.IsNullOrWhiteSpace(args) ? "" : $" -Argument {Q(args.Trim())}";
+
+        return $@"$ErrorActionPreference = 'Stop'
+$action = New-ScheduledTaskAction -Execute {Q(exePath)}{argLine} -WorkingDirectory {Q(dir)}
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User {Q(user)}
+$principal = New-ScheduledTaskPrincipal -UserId {Q(user)} -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName {Q(TaskName)} -Action $action -Trigger $trigger -Principal $principal `
+    -Settings $settings -Description 'Runs FullRGB at logon.' -Force | Out-Null
+exit 0
+";
+    }
+
+    public static string BuildUnregisterScript()
+        => $@"$ErrorActionPreference = 'SilentlyContinue'
+Unregister-ScheduledTask -TaskName '{TaskName}' -Confirm:$false
+exit 0
+";
+
+    public static bool Set(bool enable, string args) => Set(enable, args, out _);
+
+    public static bool Set(bool enable, string args, out string error)
+    {
+        error = "";
         try
         {
             var exe = Environment.ProcessPath;
-            if (exe is null) return false;
-            var cmd = BuildCommand(enable, exe, args);
-            using var p = Process.Start(new ProcessStartInfo("schtasks", cmd)
-            { CreateNoWindow = true, UseShellExecute = false });
-            if (p is null) return false;
-            // schtasks is instant; waiting lets us report a real failure instead of guessing.
-            p.WaitForExit(4000);
-            return p.HasExited ? p.ExitCode == 0 : true;
+            if (exe is null) { error = "no process path"; return false; }
+            string script = enable ? BuildRegisterScript(exe, args) : BuildUnregisterScript();
+            if (RunScript(script, false, out error)) return true;
+            // A task left behind with RunLevel=HighestAvailable cannot be touched without
+            // elevation ("Access is denied") — repair it once, elevated; the replacement is
+            // LeastPrivilege so this never recurs.
+            if (error.Contains("denied", StringComparison.OrdinalIgnoreCase) && !SDK.Elevation.IsElevated)
+                return Setup.EngineTask.RunElevatedScript(script, out error);
+            return false;
         }
-        catch { return false; }
+        catch (Exception e) { error = e.Message; return false; }
+    }
+
+    /// <summary>Runs a task script unelevated via powershell -File (temp file, like the engine task).</summary>
+    private static bool RunScript(string script, bool elevated, out string error)
+    {
+        error = "";
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"fullrgb-autostart-{Guid.NewGuid():N}.ps1");
+        try
+        {
+            File.WriteAllText(path, script, new System.Text.UTF8Encoding(true));
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{path}\"",
+                UseShellExecute = elevated,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                RedirectStandardOutput = !elevated,
+                RedirectStandardError = !elevated,
+            };
+            if (elevated) psi.Verb = "runas";
+            using var p = Process.Start(psi);
+            if (p is null) { error = "could not start powershell"; return false; }
+            string std = "", err = "";
+            if (!elevated)
+            {
+                std = p.StandardOutput.ReadToEnd();
+                err = p.StandardError.ReadToEnd();
+            }
+            if (!p.WaitForExit(30000)) { try { p.Kill(); } catch { } error = "task script timed out"; return false; }
+            if (p.ExitCode != 0)
+            {
+                error = string.IsNullOrWhiteSpace(err) ? std.Trim() : err.Trim();
+                if (string.IsNullOrWhiteSpace(error)) error = $"exit code {p.ExitCode}";
+                return false;
+            }
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception e) when (e.NativeErrorCode == 1223)
+        {
+            error = "cancelled";
+            return false;
+        }
+        catch (Exception e) { error = e.Message; return false; }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    /// <summary>Exe path the logon task will actually run, or null when it does not exist.</summary>
+    public static string? RegisteredExePath()
+    {
+        var xml = QueryXml();
+        return xml is null ? null : Setup.EngineTask.ParseCommand(xml);
+    }
+
+    /// <summary>True when the logon task exists AND points at this installation's exe.</summary>
+    public static bool MatchesCurrent()
+    {
+        var exe = Environment.ProcessPath;
+        var registered = RegisteredExePath();
+        return exe is not null && registered is not null
+            && string.Equals(System.IO.Path.GetFullPath(registered), System.IO.Path.GetFullPath(exe),
+                             StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool EnsureCurrent(string args) => EnsureCurrent(args, out _);
+
+    /// <summary>
+    /// Rewrites the logon task to this exe when it is missing or points at an old folder.
+    /// The task stores an ABSOLUTE path, so every move to a new dist folder silently broke
+    /// autostart (the task kept launching a deleted exe → 0x80070002) until the user
+    /// toggled the setting off and on. Own-user task: no UAC needed.
+    /// </summary>
+    public static bool EnsureCurrent(string args, out string error)
+    {
+        error = "";
+        try
+        {
+            if (MatchesCurrent()) return true;
+            return Set(true, args, out error);
+        }
+        catch (Exception e) { error = e.Message; return false; }
+    }
+
+    private static string? QueryXml()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = $"/Query /TN \"{TaskName}\" /XML",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (p is null) return null;
+            // same quirk as the engine task: declared UTF-16, actually single-byte when redirected
+            using var ms = new System.IO.MemoryStream();
+            var copy = p.StandardOutput.BaseStream.CopyToAsync(ms);
+            if (!copy.Wait(TimeSpan.FromSeconds(8))) { try { p.Kill(); } catch { } return null; }
+            if (!p.WaitForExit(8000)) { try { p.Kill(); } catch { } return null; }
+            if (p.ExitCode != 0) return null;
+            var bytes = ms.ToArray();
+            foreach (var enc in new System.Text.Encoding[]
+                     { System.Text.Encoding.UTF8, System.Text.Encoding.Unicode, System.Text.Encoding.Default })
+            {
+                string text = enc.GetString(bytes);
+                if (text.Contains("<Command>", StringComparison.Ordinal)) return text;
+            }
+            return null;
+        }
+        catch { return null; }
     }
 }
