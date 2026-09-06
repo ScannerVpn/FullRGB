@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private OpenRgbProcessManager? _mgr;
     private OpenRgbClient? _client;
     private EffectEngine? _engine;
+    private System.Windows.Threading.DispatcherTimer? _engineWatchdog;
     private readonly TemperatureProvider _temps = new();
     private AudioProvider? _audio;
     private bool _audioFailed;
@@ -219,7 +220,9 @@ public partial class MainWindow : Window
         };
         _engine.Status += _engineStatusHandler;
 
-        // If OpenRGB itself dies, restart the process and rebuild the session.
+        // If OpenRGB itself dies OR wedges (accepts TCP, never answers), restart the process
+        // and rebuild the session. RestartAsync → StartAsync now SDK-probes the old server and
+        // force-kills a corpse, including the task engine via `schtasks /End` (no UAC).
         _engine.ReviveEngine = ct =>
         {
             try
@@ -236,6 +239,38 @@ public partial class MainWindow : Window
             }
             catch { return false; }
         };
+
+        // Watchdog for the SILENT wedge: the engine keeps every TCP connection open but stops
+        // replying, so no write fails and ReviveEngine is never called — the GUI just sits there
+        // painting into a corpse (the "must kill OpenRGB from Task Manager" bug). Once a minute,
+        // do a cheap one-packet health probe; on two consecutive failures, revive.
+        _engineWatchdog = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMinutes(1),
+        };
+        int wdFails = 0;
+        _engineWatchdog.Tick += (_, _) =>
+        {
+            try
+            {
+                if (_client is null || !_client.Connected || _engine is { IsRunning: false }) return;
+                bool alive = _mgr?.SdkAliveAsync().GetAwaiter().GetResult() ?? true;
+                wdFails = alive ? 0 : wdFails + 1;
+                if (wdFails >= 2)
+                {
+                    wdFails = 0;
+                    SetStatus(L10n.T("status.engineRevive"), StatusKind.Busy);
+                    Task.Run(() =>
+                    {
+                        try { _engine?.ReviveEngine?.Invoke(CancellationToken.None); }
+                        catch { }
+                        Dispatcher.BeginInvoke(() => { try { RefreshStatus(); } catch { } });
+                    });
+                }
+            }
+            catch { }
+        };
+        _engineWatchdog.Start();
 
         StartPreview();
         if (App.Settings.AutoStartEffects) _engine.Apply(CurrentProfile());
@@ -451,6 +486,7 @@ public partial class MainWindow : Window
     {
         try { StopPreview(); } catch { }
         StopAutomation();
+        try { _engineWatchdog?.Stop(); } catch { }
         try
         {
             if (_engine is not null && _engineStatusHandler is not null)

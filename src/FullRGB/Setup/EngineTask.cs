@@ -171,6 +171,34 @@ exit 0
             "exit 0\r\n", out error);
 
     /// <summary>
+    /// Stops the task's running engine instance WITHOUT a UAC prompt: the Task Scheduler lets
+    /// the task's owner end their own task even when it runs at Highest. Used to retire a wedged
+    /// or leftover engine before falling back to the UAC-prompting StopElevatedEngine.
+    /// Harmless when the task is not running (non-zero exit).
+    /// </summary>
+    public static bool EndTaskInstance()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = $"/End /TN \"{TaskName}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (p is null) return false;
+            var stdTask = p.StandardOutput.ReadToEndAsync();
+            var errTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(8000)) { try { p.Kill(); } catch { } return false; }
+            return p.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// Starts the engine through the task. Needs NO elevation and shows no prompt: the Task
     /// Scheduler service launches it at the task's own (highest) level.
     /// Verifies the task points at THIS install first: otherwise schtasks silently launches

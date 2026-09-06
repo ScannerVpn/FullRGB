@@ -140,10 +140,12 @@ public sealed class AppSettings
     public bool AutoStartEffects { get; set; } = true;
 
     /// <summary>When true the bundled OpenRGB engine is killed when FullRGB truly exits
-    /// (tray → Exit). When false (default) it stays alive so the lights keep their last
-    /// state after the UI is gone. False keeps the current behaviour; true fixes the
-    /// \"must kill from Task Manager\" complaint without forcing UAC on every user.</summary>
-    public bool CloseEngineOnExit { get; set; } = false;
+    /// (tray → Exit). When false it stays alive so the lights keep their last state after
+    /// the UI is gone. Default TRUE: a leftover engine is what wedged the SDK port and
+    /// forced the "kill OpenRGB from Task Manager" workaround. With StartWithWindows on,
+    /// the next launch re-attaches to a healthy engine within seconds anyway, and the
+    /// shutdown path ends the engine task without UAC (`schtasks /End`).</summary>
+    public bool CloseEngineOnExit { get; set; } = true;
 
     /// <summary>Rotate through profiles automatically (showcase / ambient mode).</summary>
     public bool SchedulerEnabled { get; set; } = false;

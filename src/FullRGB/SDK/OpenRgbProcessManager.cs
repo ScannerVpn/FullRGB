@@ -64,16 +64,87 @@ public sealed class OpenRgbProcessManager : IDisposable
 
     public bool IsRunning => _proc is { HasExited: false } || AttachedToExisting;
 
+    /// <summary>
+    /// True when something LISTENING on the port is a live OpenRGB SDK server: a real
+    /// REQUEST_CONTROLLER_COUNT exchange completes. A hung engine accepts TCP but never
+    /// replies — attaching to it meant a dead GUI with no error (the user's only fix was
+    /// killing OpenRGB.exe from Task Manager), so "port open" alone is not good enough.
+    /// </summary>
+    public async Task<bool> SdkAliveAsync()
+    {
+        try
+        {
+            using var t = new TcpClient();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500));
+            await t.ConnectAsync("127.0.0.1", Port, cts.Token).ConfigureAwait(false);
+            t.NoDelay = true;
+            var s = t.GetStream();
+
+            // frame: "ORGB" + device 0 + packet 0 (REQUEST_CONTROLLER_COUNT) + length 0
+            byte[] f = { (byte)'O', (byte)'R', (byte)'G', (byte)'B', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            await s.WriteAsync(f.AsMemory(0, 16), cts.Token).ConfigureAwait(false);
+
+            var buf = new byte[16];
+            int n = await s.ReadAsync(buf.AsMemory(0, 16), cts.Token).ConfigureAwait(false);
+            // a real server answers with the same magic + 4-byte payload length prefix (16+4 min)
+            return n >= 4 && buf[0] == (byte)'O' && buf[1] == (byte)'R' && buf[2] == (byte)'G' && buf[3] == (byte)'B';
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Best-effort forceful kill of ANY engine process serving our port, unelevated: our own
+    /// launches, plus leftovers we own. The elevated task engine cannot be killed from here;
+    /// callers that must also stop that use <see cref="Setup.EngineTask.StopElevatedEngine"/>.
+    /// </summary>
+    public void KillEngine()
+    {
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("OpenRGB"))
+            {
+                string? path = null;
+                try { path = p.MainModule?.FileName; } catch { }
+                // Known path = a process we can verify belongs to this install; unknown = elevated
+                // (cannot inspect) — leave elevated ones to the caller unless nothing is listening.
+                if (path is null || string.Equals(path, ExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { p.Kill(true); } catch { }
+                }
+            }
+        }
+        catch { /* best effort */ }
+        _proc?.Dispose();
+        _proc = null;
+        AttachedToExisting = false;
+    }
+
     /// <summary>Starts OpenRGB with our own token and waits until the SDK port accepts TCP.</summary>
     public async Task StartAsync(TimeSpan? timeout = null, CancellationToken ct = default)
     {
         if (_proc is { HasExited: false }) return;
 
-        // Someone is already serving the SDK port: reuse it instead of fighting over the hardware.
+        // Someone is already serving the SDK port: reuse it only if it actually speaks SDK.
+        // A hung OpenRGB (killed GUI leftover, USB/HID deadlock) holds the port open but never
+        // answers — attaching to it produced the "no effects, must kill from Task Manager" bug.
+        // Probe first; a corpse is killed and replaced with a fresh engine.
         if (await PortOpenAsync().ConfigureAwait(false))
         {
-            AttachedToExisting = true;
-            return;
+            if (await SdkAliveAsync().ConfigureAwait(false))
+            {
+                AttachedToExisting = true;
+                return;
+            }
+            KillEngine();
+            // wait for the dead server's port to close before starting the replacement
+            var drain = System.Diagnostics.Stopwatch.StartNew();
+            while (drain.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!await PortOpenAsync().ConfigureAwait(false)) break;
+                await Task.Delay(200, ct).ConfigureAwait(false);
+            }
+            await Task.Delay(600, ct).ConfigureAwait(false);
         }
         AttachedToExisting = false;
 
@@ -226,19 +297,24 @@ public sealed class OpenRgbProcessManager : IDisposable
     /// Best-effort stop that also kills an elevated engine started via the Scheduled Task.
     /// Used when the user opts in to \"close engine with the app\" — otherwise closing
     /// FullRGB would leave OpenRGB.exe lingering and the user would have to kill it from
-    /// Task Manager. This costs one UAC prompt only when the engine was actually elevated;
-    /// when the engine was ours or no engine is running it is the same as <see cref=\"Stop\"/>.
+    /// Task Manager. Tries the no-UAC path first (`schtasks /End`); the UAC-prompting
+    /// elevated script only runs when something is STILL serving the port after that.
     /// </summary>
     public void StopIncludingElevated()
     {
         Stop();
-        // _proc == null but the task's engine (elevated) is still serving the port: we left
-        // it alive intentionally before (AttachedToExisting). If the user asked to close with
-        // the app, kill that too — but only if something is still listening.
         try
         {
-            if (PortOpenSync())
-                Setup.EngineTask.StopElevatedEngine(out _);
+            if (!PortOpenSync()) return;    // nothing (else) is serving the port: done
+
+            // 1) no-UAC path: end the task instance if the engine came from the task
+            Setup.EngineTask.EndTaskInstance();
+            for (int i = 0; i < 10 && PortOpenSync(); i++) System.Threading.Thread.Sleep(200);
+            if (!PortOpenSync()) return;
+
+            // 2) still alive: engine is elevated but not from the task (or /End failed) —
+            //    the only remaining kill path costs one UAC prompt.
+            Setup.EngineTask.StopElevatedEngine(out _);
         }
         catch { }
     }
