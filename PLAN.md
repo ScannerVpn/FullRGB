@@ -1,6 +1,6 @@
 # FullRGB — PLAN.md
 
-**Last updated:** 2026-09-03 (round 12: music reactivity, 6 user-picked features, v1.1.0 released)
+**Last updated:** 2026-09-06 (round 13: auto-replace hung engine, no-UAC engine stop, watchdog — v1.2.0)
 **Repo root:** `G:\Ai\RGB Control` (no git)
 **Status:** WORKING and verified on the real rig.
 
@@ -583,3 +583,27 @@ Notes for the next agent:
 7. **Cleanup** — gate the `fullrgb-sdk.log` trace behind `--debug`, delete `_probe\icontest\`, and
    manually delete `src\FullRGB\binReleasenet8.0-windowswin-x64publish2 --nologo\`
    (agent sandbox blocked it).
+
+---
+
+## 10. Round 13 (2026-09-06) — v1.2.0: never require Task Manager again
+
+**User report:** "OpenRGB wouldn't close; I killed it from Task Manager and everything worked."
+Diagnosis: a wedged engine holds the SDK port but never answers; `StartAsync` attached on
+port-open alone, so the GUI painted into a corpse with zero errors.
+
+Fixes (all verified on the real rig):
+1. `SdkAliveAsync` — real `REQUEST_CONTROLLER_COUNT` probe before attaching. A corpse is
+   force-killed and replaced with a fresh engine during `StartAsync`.
+2. `EngineTask.EndTaskInstance` — `schtasks /End` retires the elevated task engine with NO UAC
+   (verified live). `StopIncludingElevated` tries it before the UAC-prompting script.
+3. MainWindow watchdog — once a minute, probe the engine; two consecutive failures trigger the
+   existing `ReviveEngine` path (silent mid-session wedge was previously undetectable: writes
+   into a half-dead TCP still "succeed").
+4. `CloseEngineOnExit` default **true** — closing the app no longer leaves `OpenRGB.exe`
+   lingering to go stale. Existing settings.json keeps its old value; set it in Settings.
+
+E2E test: froze a real engine (`NtSuspendProcess`, rc=0, probe TIMEOUT), launched dist20 →
+old engine killed, new engine up, SDK answered, GUI painting again.
+
+Artifacts: `dist20\FullRGB.exe` (v1.2.0, 83.2 MB single file).
