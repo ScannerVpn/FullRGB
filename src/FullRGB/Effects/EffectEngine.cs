@@ -340,6 +340,7 @@ public sealed class EffectEngine : IDisposable
                         AudioTreble = _audio?.Treble ?? 0,
                         Beat = _audio?.Beat ?? 0,
                     };
+                    ctx.ScreenValid = _audio is not null && _audio.FillScreenContext(ctx);
 
                     (renderMs, ioMs) = RenderDevice(dev, profile, ctx, channel, audioState);
                     failures = 0;

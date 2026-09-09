@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>audio_probe</AssemblyName>
+    <NoWarn>CS8600;CS8602;CS8604</NoWarn>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FullRGB</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../src/FullRGB/Sensors/SensorProviders.cs" />
+    <Compile Include="AudioProbe.cs" />
+    <Compile Include="EffectContextStub.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+  </ItemGroup>
+</Project>

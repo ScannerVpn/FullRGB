@@ -20,8 +20,20 @@ public sealed class OpenRgbProcessManager : IDisposable
     public string ExePath { get; }
     public int Port { get; }
 
-    /// <summary>True when we attached to a server that was already running (we must not kill it).</summary>
+    /// <summary>
+    /// True when we attached to a server that was already running (we must not kill it).
+    /// </summary>
     public bool AttachedToExisting { get; private set; }
+
+    /// <summary>
+    /// The engine extracts to a folder keyed by the bundle's SHA-256, so every engine update
+    /// changes the exe path an already-registered elevated task points at. Without repair the
+    /// task keeps launching the OLD folder's engine (unelevated-ish, wrong PawnIO context) or
+    /// nothing at all, and RGB RAM silently disappears. This is a pure path comparison; it
+    /// never shows UI and is safe to call from any thread.
+    /// </summary>
+    public static bool TaskIsStale(string exePath) =>
+        Setup.EngineTask.IsRegistered() && !Setup.EngineTask.MatchesInstall(exePath);
 
     /// <summary>True when the engine was launched through the elevated Scheduled Task.</summary>
     public bool StartedViaTask { get; private set; }
@@ -123,6 +135,7 @@ public sealed class OpenRgbProcessManager : IDisposable
     public async Task StartAsync(TimeSpan? timeout = null, CancellationToken ct = default)
     {
         if (_proc is { HasExited: false }) return;
+        TaskStartError = null;
 
         // Someone is already serving the SDK port: reuse it only if it actually speaks SDK.
         // A hung OpenRGB (killed GUI leftover, USB/HID deadlock) holds the port open but never
@@ -159,7 +172,9 @@ public sealed class OpenRgbProcessManager : IDisposable
         //
         // MatchesInstall, not IsRegistered: the task stores an ABSOLUTE exe path, so a task left
         // behind by another install (dist8 vs dist9, or a moved folder) would silently start the
-        // WRONG engine — or none at all.
+        // WRONG engine — or none at all. With the embedded engine the path changes on every
+        // engine update (SHA-keyed folder), so a STALE task is expected, not an anomaly: it is
+        // reported via TaskStartError so the GUI can offer/perform a one-click re-register.
         if (Setup.EngineTask.MatchesInstall(ExePath))
         {
             if (Setup.EngineTask.Run(out var taskError))
@@ -185,6 +200,13 @@ public sealed class OpenRgbProcessManager : IDisposable
             {
                 TaskStartError = taskError;
             }
+        }
+        else if (TaskIsStale(ExePath))
+        {
+            // Registered but aimed at an older extraction folder. Do NOT launch that exe from
+            // here (it would run unelevated and kill SMBus); fall through to a plain launch and
+            // let the caller repair the task.
+            TaskStartError = "engine task is stale (points at an older engine folder)";
         }
 
         var psi = new ProcessStartInfo

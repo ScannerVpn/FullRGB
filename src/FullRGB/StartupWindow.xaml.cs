@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.IO;
+using FullRGB.Config;
 using FullRGB.SDK;
 using FullRGB.Setup;
 using Application = System.Windows.Application;
@@ -31,7 +33,13 @@ public partial class StartupWindow : Window
         TitleTxt.Text = L10n.T("scan.title");
         SkipBtn.Content = L10n.T("scan.skip");
         // --uitest/--uishot must never start the engine or prompt for UAC.
-        if (!MainWindow.Headless) Loaded += async (_, _) => { ShowPlaceholder(); await RunAsync(); };
+        if (!MainWindow.Headless) Loaded += async (_, _) =>
+        {
+            ShowPlaceholder();
+            try { await RunAsync(); }
+            catch (OperationCanceledException) { /* user closed the splash: App shuts down */ }
+            catch (Exception e) { try { Log("startup: " + e.Message, (Brush)FindResource("Danger")); } catch { } }
+        };
         else { Stage(L10n.T("scan.step.detect"), 62); ShowPlaceholder(); }
     }
 
@@ -116,11 +124,13 @@ public partial class StartupWindow : Window
 
         // ---- 2. engine ----
         Stage(L10n.T("scan.step.engine"));
+        string exePath = OpenRgbProcessManager.DefaultExePath();
         try
         {
-            Manager = new OpenRgbProcessManager(OpenRgbProcessManager.DefaultExePath(), App.Settings.ServerPort);
+            Manager = new OpenRgbProcessManager(exePath, App.Settings.ServerPort);
             await Manager.StartAsync(TimeSpan.FromSeconds(75));
         }
+        catch (OperationCanceledException) { return; }
         catch (Exception e)
         {
             Log("engine: " + e.Message, (Brush)FindResource("Danger"));
@@ -129,26 +139,82 @@ public partial class StartupWindow : Window
             return;
         }
 
+        // ---- 2b. stale engine task repair ----
+        // The bundle extracts to a SHA-keyed folder, so every engine update invalidates the
+        // absolute path stored in the elevated task. A stale task = engine runs unelevated =
+        // PawnIO "Permission Denied" = RGB RAM missing. Repair it ONCE per bundle change here,
+        // with a single UAC, instead of leaving RAM dead until the user finds the setting.
+        await RepairStaleEngineTaskAsync(exePath);
+
         // ---- 3. detect ----
         Stage(L10n.T("scan.step.detect"));
         // Detection continues for several seconds AFTER the port opens; connecting too early
         // returns a short device list (this is why fans/coolers appeared "missing").
-        await Task.Delay(Manager.AttachedToExisting ? 500 : 5000);
+        // At Windows logon (autostart) the USB stack is still enumerating, so the first
+        // answer is often 0 devices. That 0 must NEVER count as "stable" — otherwise we
+        // conclude after ~2s with an empty list and the user has to press Rescan by hand.
+        try
+        {
+            await Task.Delay(Manager.AttachedToExisting ? 500 : 5000, _cts.Token);
+        }
+        catch (OperationCanceledException) { return; }
         try
         {
             Client = new OpenRgbClient();
             await Task.Run(() => Client!.Connect("127.0.0.1", App.Settings.ServerPort, "FullRGB"), _cts.Token);
 
             // Wait until the device list stops growing (bounded), so late HID/SMBus devices are included.
-            int stable = 0, last = Client.Controllers.Count;
-            for (int i = 0; i < 12 && stable < 2; i++)
+            // Zero is never stable: keep polling the full window so slow boots still get devices.
+            // If the engine started before USB was ready it may never report late devices via
+            // refresh alone — restart it once mid-wait so its own detection runs again.
+            bool restartedForBoot = false;
+            int stable = 0, last = -1;
+            for (int i = 0; i < 16; i++)
             {
+                _cts.Token.ThrowIfCancellationRequested();
                 await Task.Delay(900, _cts.Token);
-                await Task.Run(() => Client!.RefreshControllers(_cts.Token), _cts.Token);
+                try
+                {
+                    await Task.Run(() => Client!.RefreshControllers(_cts.Token), _cts.Token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* transient SDK read: next poll retries */ }
                 int now = Client.Controllers.Count;
-                stable = now == last ? stable + 1 : 0;
+                if (now == 0)
+                {
+                    stable = 0;
+                }
+                else if (now == last)
+                {
+                    stable++;
+                }
+                else
+                {
+                    stable = 0;
+                }
                 last = now;
                 Stage(L10n.T("scan.step.detect") + $" ({now})");
+                if (now == 0 && !restartedForBoot && !Manager.AttachedToExisting && i == 7)
+                {
+                    // ~7s with nothing: the engine likely enumerated too early. Restart it
+                    // once so ITS detection re-runs against a ready USB stack, then reconnect.
+                    restartedForBoot = true;
+                    try
+                    {
+                        Log(L10n.T("status.engineRevive"), (Brush)FindResource("Faint"));
+                        await Manager.RestartAsync(TimeSpan.FromSeconds(60), _cts.Token);
+                        await Task.Delay(3500, _cts.Token);
+                        await Task.Run(() => Client!.Connect("127.0.0.1", App.Settings.ServerPort, "FullRGB"), _cts.Token);
+                        last = -1;
+                        stable = 0;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception re)
+                    {
+                        Log("engine: " + re.Message, (Brush)FindResource("Danger"));
+                    }
+                }
+                if (now > 0 && stable >= 2 && i >= 4) break;
             }
         }
         catch (Exception e)
@@ -181,6 +247,62 @@ public partial class StartupWindow : Window
         await Task.Delay(900);
         DialogResult = true;
         Close();
+    }
+
+    /// <summary>
+    /// Re-registers the elevated engine task when it points at an older extraction folder.
+    /// Runs ONCE per bundle change: a UAC prompt only fires when the stored hash differs from
+    /// this build's, and declining records <see cref="AppSettings.EngineTaskDeclined"/> so the
+    /// prompt does not nag on every launch (opt-in repair stays in Hardware → Advanced).
+    /// After a successful repair the engine is restarted THROUGH the task, so RAM appears
+    /// in this very session.
+    /// </summary>
+    private async Task RepairStaleEngineTaskAsync(string exePath)
+    {
+        // Nothing to do unless the task exists AND points somewhere else. (A missing task means
+        // the user never enabled RGB RAM: that flow stays in Hardware → Advanced.)
+        try
+        {
+            if (!OpenRgbProcessManager.TaskIsStale(exePath)) return;
+            // Identity = the embedded bundle's SHA-256 (== the extraction folder name), NOT the
+            // folder name of whatever path DefaultExePath returned: a vendor-folder fallback
+            // has a constant "folder name" that would corrupt the once-per-bundle logic.
+            string? bundleHash = SDK.EngineBundle.CurrentHash();
+            if (string.IsNullOrEmpty(bundleHash)) return;
+            if (App.Settings.EngineTaskHash == bundleHash) return;   // already repaired / declined for this bundle
+            if (App.Settings.EngineTaskDeclined && App.Settings.EngineTaskHash.Length > 0) return;   // user said no to this bundle already
+
+            Log(L10n.T("scan.ram.repair"), (Brush)FindResource("Warn"));
+            string error = "";
+            bool ok = await Task.Run(() => Setup.EngineTask.Register(exePath, App.Settings.ServerPort, out error));
+            App.Settings.EngineTaskHash = bundleHash;
+            App.Settings.EngineTaskDeclined = !ok;
+            ProfileStore.Save(App.Settings);
+            if (!ok)
+            {
+                Log(L10n.T("scan.ram.repairFailed", error), (Brush)FindResource("Faint"));
+                return;
+            }
+
+            // Success: swap the running (unelevated) engine for the elevated one so the RAM
+            // shows up now, not after the next restart. Skip entirely when the user closed
+            // the splash meanwhile — never restart an engine for a window that is gone.
+            Log(L10n.T("scan.ram.repaired"), (Brush)FindResource("Warn"));
+            _cts.Token.ThrowIfCancellationRequested();
+            if (!IsVisible) return;
+            try
+            {
+                Manager!.Stop();
+                Setup.EngineTask.EndTaskInstance();
+            }
+            catch { }
+            await Task.Delay(1500, _cts.Token);
+            if (!IsVisible) return;
+            await Manager!.RestartAsync(TimeSpan.FromSeconds(60), _cts.Token);
+            await Task.Delay(3500, _cts.Token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* repair is best-effort; never block startup on it */ }
     }
 
     private async void Action_Click(object sender, RoutedEventArgs e)

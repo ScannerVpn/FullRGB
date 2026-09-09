@@ -33,6 +33,10 @@ public static class L10n
             ["chip.scanner"] = "Scanner",
             ["chip.sparkle"] = "Sparkle",
             ["chip.plasma"] = "Plasma",
+            ["chip.ambient"] = "Ambient (Screen)",
+            ["chip.gaming"] = "Gaming",
+            ["fx.ambientHint"] = "Each zone shows the colour of one part of your screen — the display itself is the palette. Brightness adjusts intensity.",
+            ["tray.gaming"] = "Gaming lights",
             ["lbl.color"] = "Color",
             ["lbl.color2"] = "Second color",
             ["lbl.color3"] = "Third color",
@@ -254,6 +258,9 @@ public static class L10n
             ["scan.step.ready"] = "Ready",
             ["scan.waiting"] = "Waiting for the RGB engine…",
             ["hero.global"] = "All devices",
+            ["scan.ram.repair"] = "Updating RGB RAM access for the new version — approve the Windows prompt...",
+            ["scan.ram.repaired"] = "RGB RAM access updated — restarting the engine elevated...",
+            ["scan.ram.repairFailed"] = "RGB RAM update skipped: {0}",
         },
         ["fa"] = new()
         {
@@ -282,6 +289,10 @@ public static class L10n
             ["chip.scanner"] = "رفت‌وبرگشتی",
             ["chip.sparkle"] = "درخشش",
             ["chip.plasma"] = "پلاسما",
+            ["chip.ambient"] = "محیطی (نمایشگر)",
+            ["chip.gaming"] = "گیمینگ",
+            ["fx.ambientHint"] = "هر ناحیه رنگ یک قسمت از نمایشگر را نشان می‌دهد — خود نمایشگر پالت رنگ است. روشنایی را با لغزنده تنظیم کن.",
+            ["tray.gaming"] = "چراغ‌های گیمینگ",
             ["lbl.color"] = "رنگ",
             ["lbl.color2"] = "رنگ دوم",
             ["lbl.color3"] = "رنگ سوم",
@@ -502,6 +513,9 @@ public static class L10n
             ["scan.step.ready"] = "آماده",
             ["scan.waiting"] = "در انتظار موتور RGB…",
             ["hero.global"] = "همه دستگاه‌ها",
+            ["scan.ram.repair"] = "به‌روزرسانی دسترسی نور رم برای نسخه جدید — پنجره ویندوز را تأیید کن...",
+            ["scan.ram.repaired"] = "دسترسی نور رم به‌روز شد — موتور با دسترسی ادمین دوباره اجرا می‌شود...",
+            ["scan.ram.repairFailed"] = "به‌روزرسانی نور رم انجام نشد: {0}",
         },
     };
 

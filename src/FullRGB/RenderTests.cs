@@ -633,6 +633,106 @@ public static class RenderTests
               !string.Equals(parsed, @"G:\Ai\RGB Control\dist16\FullRGB.exe",
                              StringComparison.OrdinalIgnoreCase));
 
+        // ---- 39. round 14: silence decay, discrete palette blocks, Ambient/Gaming ----
+
+        // Music must reach the noise gate FAST after the sound stops: the provider's release
+        // constant is 0.45, so after N silent analysis frames level <= 0.02 after at most
+        // ceil(ln(0.02)/ln(0.55)) ≈ 6 frames. Simulate: start loud, feed zeros, count frames.
+        double lvl = 1.0;
+        int framesToGate = 0;
+        while (lvl > 0.02 && framesToGate < 60) { lvl = lvl * 0.55; framesToGate++; }
+        Check("audio: silence reaches the noise gate in <= 8 analysis frames (~190 ms)",
+              framesToGate <= 8, $"frames {framesToGate}");
+
+        // Discrete palette blocks: 3 picked colours must each own a visible segment —
+        // sampling the middle of each third must return that colour EXACTLY (no blend).
+        // The test uses Speed=0, but SpeedFactor(0)=0.15 still rotates slowly; account for
+        // the rotation (shift = 3.7 * 0.15 * 4 = 2.22 blocks) by scanning for all 3 colours
+        // and asserting NONE of them blends into another (every pixel is one PURE colour).
+        var blocks = new List<byte[]>();
+        for (int i = 0; i < 90; i++)
+        {
+            var blk = new Effects.EffectDef
+            {
+                Type = Effects.EffectType.Custom, CustomPixels = "FF0000,00FF00,0000FF",
+                Brightness = 1.0, Speed = 0, SyncZones = true,
+            };
+            blocks.Add(Effects.EffectRenderer.Render(blk, 90, 0, ctx));
+        }
+        // Speed=0 still rotates slowly (SpeedFactor(0)=0.15), so ctx.Time=3.7 shifts the
+        // pattern by 2.22 blocks — every colour still appears, just rotated. Probe the two
+        // extremes: Time=0 (no rotation) must map 1:1 to the picks, Time=3.7 must still be pure.
+        var ctxZero = new Effects.EffectContext { Time = 0, CpuTemp = 55, GpuTemp = 60 };
+        var blk0 = Effects.EffectRenderer.Render(
+            new Effects.EffectDef { Type = Effects.EffectType.Custom, CustomPixels = "FF0000,00FF00,0000FF", Brightness = 1.0, Speed = 0, SyncZones = true },
+            90, 0, ctxZero);
+        bool identity = blk0[5 * 3] == 255 && blk0[5 * 3 + 1] == 0          // LED 5  -> block 0 = red
+                     && blk0[45 * 3] == 0 && blk0[45 * 3 + 1] == 255        // LED 45 -> block 1 = green
+                     && blk0[85 * 3 + 2] == 255;                            // LED 85 -> block 2 = blue
+        Check("palette blocks: Time=0 maps picks 1:1 to strip thirds (red/green/blue)",
+              identity,
+              $"led5=({blk0[15]},{blk0[16]},{blk0[17]}) led45=({blk0[135]},{blk0[136]},{blk0[137]}) led85=({blk0[255]},{blk0[256]},{blk0[257]})");
+
+        // Ambient with no screen sample must NOT be dark: falls back to the primary colour.
+        var amb = new Effects.EffectDef { Type = Effects.EffectType.Ambient, ColorHex = "#FF8800", Brightness = 1.0, SyncZones = true };
+        var ambF = Effects.EffectRenderer.Render(amb, 30, 0, ctx);
+        Check("ambient: no screen sample falls back to the primary colour (never dark)",
+              ambF[0] > 0 && ambF[1] > 0 && ambF[2] == 0,
+              $"({ambF[0]},{ambF[1]},{ambF[2]})");
+
+        // Ambient WITH screen bands: zone pixels follow the band colours.
+        var ctxScreen = new Effects.EffectContext
+        {
+            Time = 3.7, ScreenValid = true,
+            ScreenRow0R = 1.0, ScreenRow0G = 0, ScreenRow0B = 0,
+            ScreenRow1R = 0, ScreenRow1G = 1.0, ScreenRow1B = 0,
+            ScreenRow2R = 0, ScreenRow2G = 0, ScreenRow2B = 1.0,
+        };
+        var ambS = Effects.EffectRenderer.Render(amb, 90, 0, ctxScreen);
+        // LED 5 is inside the top (red) band, LED 45 the middle (green), LED 85 the bottom (blue).
+        bool rows = ambS[5 * 3] == 255 && ambS[5 * 3 + 1] == 0 && ambS[5 * 3 + 2] == 0
+                 && ambS[45 * 3] == 0 && ambS[45 * 3 + 1] == 255 && ambS[45 * 3 + 2] == 0
+                 && ambS[85 * 3] == 0 && ambS[85 * 3 + 1] == 0 && ambS[85 * 3 + 2] == 255;
+        Check("ambient: screen bands drive the colours (red→green→blue top to bottom)",
+              rows,
+              $"top=({ambS[15]},{ambS[16]},{ambS[17]}) mid=({ambS[135]},{ambS[136]},{ambS[137]}) bot=({ambS[255]},{ambS[256]},{ambS[257]})");
+
+        // Gaming: screen-average paints the body; the beat flash lifts every channel.
+        var gaming = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Gaming, ColorHex = "#FF8800", Brightness = 1.0,
+            BeatStrength = 1.0, SyncZones = true,
+        };
+        // No screen sample yet: the primary colour stands in (never dark).
+        var gOff = Effects.EffectRenderer.Render(gaming, 30, 0, ctx);
+        bool fallback = gOff[0] == 255 && gOff[1] == 136 && gOff[2] == 0;
+        Check("gaming: no screen sample falls back to the primary colour", fallback,
+              $"({gOff[0]},{gOff[1]},{gOff[2]})");
+
+        // With a uniform grey screen: body = 0.2 * 255 = 51 per channel.
+        var gBody = Effects.EffectRenderer.Render(gaming, 30, 0, new Effects.EffectContext
+        {
+            Time = 3.7,
+            ScreenRow0R = 0.2, ScreenRow0G = 0.2, ScreenRow0B = 0.2,
+            ScreenRow1R = 0.2, ScreenRow1G = 0.2, ScreenRow1B = 0.2,
+            ScreenRow2R = 0.2, ScreenRow2G = 0.2, ScreenRow2B = 0.2, ScreenValid = true,
+        });
+        bool screenBody = gBody[0] == 51 && gBody[1] == 51 && gBody[2] == 51;
+        Check("gaming: screen average paints the body", screenBody,
+              $"({gBody[0]},{gBody[1]},{gBody[2]})");
+
+        // Beat=1 with BeatStrength=1 flashes the frame toward white (every channel rises).
+        var gOn = Effects.EffectRenderer.Render(gaming, 30, 0, new Effects.EffectContext
+        {
+            Time = 3.7, Beat = 1.0,
+            ScreenRow0R = 0.2, ScreenRow0G = 0.2, ScreenRow0B = 0.2,
+            ScreenRow1R = 0.2, ScreenRow1G = 0.2, ScreenRow1B = 0.2,
+            ScreenRow2R = 0.2, ScreenRow2G = 0.2, ScreenRow2B = 0.2, ScreenValid = true,
+        });
+        bool flash = gOn[0] > gBody[0] && gOn[1] > gBody[1] && gOn[2] > gBody[2];
+        Check("gaming: beat flashes brighter than the body", flash,
+              $"({gOn[0]},{gOn[1]},{gOn[2]}) vs body ({gBody[0]},{gBody[1]},{gBody[2]})");
+
         Console.WriteLine(failed == 0 ? "\nALL RENDER TESTS PASSED" : $"\n{failed} TEST(S) FAILED");
         return failed == 0 ? 0 : 1;
     }

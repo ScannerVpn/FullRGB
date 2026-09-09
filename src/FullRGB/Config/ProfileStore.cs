@@ -159,6 +159,19 @@ public sealed class AppSettings
     /// <summary>Master switch for per-app profiles.</summary>
     public bool ForegroundEnabled { get; set; } = false;
 
+    /// <summary>
+    /// Engine-folder hash the elevated task was last (re)registered for. The bundle extracts to
+    /// a SHA-256-keyed folder, so every engine update changes the path the task must run. When
+    /// this differs from the current bundle, the app re-registers the task once (one UAC) and
+    /// remembers the new hash — instead of silently running the engine unelevated forever.
+    /// Empty = never registered (or the user said "no"), which means: offer again at startup.
+    /// </summary>
+    public string EngineTaskHash { get; set; } = "";
+
+    /// <summary>Set when the user DECLINED the re-registration UAC, so we stop asking every launch
+    /// until the hash changes again. Re-registration is then opt-in from Hardware → Advanced.</summary>
+    public bool EngineTaskDeclined { get; set; }
+
     public string ActiveProfile { get; set; } = "Default";
     public List<Profile> Profiles { get; set; } = new() { new() };
 

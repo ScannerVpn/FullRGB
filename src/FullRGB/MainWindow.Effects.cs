@@ -48,6 +48,8 @@ public partial class MainWindow
         new(EffectType.Scanner,     "chip.scanner",   null, ScannerPath),
         new(EffectType.Sparkle,     "chip.sparkle",   null, SparklePath, true),
         new(EffectType.Plasma,      "chip.plasma",    null, PlasmaPath),
+        new(EffectType.Ambient,     "chip.ambient",   "\uE7F4"),   // Connected: screen mirror
+        new(EffectType.Gaming,      "chip.gaming",    "\uE7FC"),   // Game controller
     };
 
     // 24×24 icon geometries (drawn to match MDL2's optical weight)
@@ -197,7 +199,8 @@ public partial class MainWindow
         EffectType.Fire => false,         // fixed ember palette
         EffectType.Temperature => false,  // fixed cold -> hot ramp
         EffectType.Custom => false,       // palette comes from CustomPixels
-        _ => true,
+        EffectType.Ambient => true,       // screen drives the colours; primary is the no-screen fallback
+        _ => true,                        // Gaming included: primary paints when no screen sample exists
     };
 
     private void BuildParams()
@@ -311,6 +314,27 @@ public partial class MainWindow
             AddSlider(L10n.T("lbl.sensitivity"), (_edit.AudioGain - 0.2) / 2.3, v => _edit.AudioGain = 0.2 + v * 2.3,
                       () => $"{_edit.AudioGain:F1}×");
             AddSlider(L10n.T("lbl.beat"), _edit.BeatStrength, v => _edit.BeatStrength = v);
+        }
+
+        if (_edit.Type == EffectType.Gaming)
+        {
+            // Screen colour drives the strip; only the hit-flash strength is adjustable
+            // (plus the primary colour shown as the no-screen fallback).
+            AddSlider(L10n.T("lbl.beat"), _edit.BeatStrength, v => _edit.BeatStrength = v);
+        }
+
+        if (_edit.Type == EffectType.Ambient)
+        {
+            // Brightness is the only meaningful knob: the colours come from the screen.
+            // A short hint explains where the colours come from.
+            EffectParams.Children.Add(new TextBlock
+            {
+                Text = L10n.T("fx.ambientHint"),
+                Style = (Style)FindResource("FaintTxt"),
+                Foreground = (Brush)FindResource("Muted"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10),
+            });
         }
 
         if (_edit.Type is EffectType.Wave or EffectType.Breathing or EffectType.Blink

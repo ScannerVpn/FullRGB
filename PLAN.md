@@ -1,14 +1,14 @@
 # FullRGB — PLAN.md
 
-**Last updated:** 2026-09-06 (round 13: auto-replace hung engine, no-UAC engine stop, watchdog — v1.2.0)
-**Repo root:** `G:\Ai\RGB Control` (no git)
+**Last updated:** 2026-09-09 (round 14: audio release fix, discrete palette blocks, Ambient + Gaming effects, screen sampling, audit fixes pending)
+**Repo root:** `G:\Ai\RGB Control` (git since v1.0; HEAD `558ebd3` = v1.2.0 round 13)
 **Status:** WORKING and verified on the real rig.
 
 | Gate | Command | Latest result |
 |---|---|---|
-| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (81 asserts incl. 12× `colorRow`) |
+| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (81+6 asserts incl. silence-decay, palette blocks, Ambient/Gaming) |
 | UI (XAML/resources/glyphs/l10n/bundle/USB) | `FullRGB.exe --uitest` | **ALL UI TESTS PASSED** |
-| Real hardware | `FullRGB.exe --fxtest --seconds=15` | **devices=4, framesSent=1684, errors=0** |
+| Real hardware | `FullRGB.exe --fxtest --seconds=8` | **devices=4, framesSent=964, errors=0** |
 | Engine task | `FullRGB.exe --enginetask=status` | `registered=True matchesThisInstall=True pawnio=True elevated=False` |
 | USB inventory | `FullRGB.exe --usbscan` | 9 devices; mouse + keyboard identified by product string |
 | Screenshots | `FullRGB.exe --uishot` | 6 PNGs in `%TEMP%\fullrgb-shots` |
@@ -560,7 +560,15 @@ Notes for the next agent:
 
 ## 9. Remaining work (by value)
 
-1. **User GUI smoke test of `dist11\FullRGB.exe`** — exit any older FullRGB from the tray first, then:
+0. **Round-14 audit — the two P1s are FIXED (2026-09-09 13:0x), P2/P3 remain**, details in `AUDIT-2026-09-09.md`:
+   - **P1 (FIXED)** hash identity is now `EngineBundle.CurrentHash()`; vendor fallback never recorded.
+   - **P1 (FIXED)** splash-close during UAC: OCE caught in the `Loaded` lambda; repair skips the restart when the window is gone.
+   - **P2 (open)** `TaskStartError` has zero consumers — surface the stale-task state in the GUI or delete the property.
+   - **P2 (open)** declined repair = engine runs unelevated with no hint until next bundle change — tray/status hint driven by `TaskIsStale`.
+   - **P2 (open)** `verify.sh` fxtest leg captured no output on 09-09 morning (manual run fine) — re-verify with the GUI closed.
+   - **P3 (open)** untrack `_probe/st_out.txt` (+ the other `_probe` output files).
+   - Round-14 FEATURES (audio decay, palette blocks, Ambient, Gaming) are DONE and verified — see §10.
+1. **User GUI smoke test of `dist22\FullRGB.exe`** — exit any older FullRGB from the tray first, then:
    the four pages switch; the hero preview animates; a solid colour looks the same everywhere;
    the music effect is dark in silence and reacts to bass when set to Bass; changing the accent
    recolours the whole window; per-zone override (pump ring ≠ fans) applies; closing the window
@@ -586,7 +594,64 @@ Notes for the next agent:
 
 ---
 
-## 10. Round 13 (2026-09-06) — v1.2.0: never require Task Manager again
+## 10. Round 14 (2026-09-09) — audio decay, honest palette, screen-driven effects
+
+**User reports driving this round:**
+1. "رو حالت موزیک بعد قطع صدا 1-2 ثانیه طول میکش نور خاموش بشه" — the lights kept glowing 1–2 s after the music stopped.
+2. "حالت گیمینگ هم بزار" — a gaming mode.
+3. "نور ها با رنگ های صفحه نمایش یکی باش" — screen ambient lighting.
+4. "من چند رنگ انتخاب میکنم ولی نور یک رنگ ترکیبی نشون میده" — picked colours blended into one mixed hue instead of showing separately.
+5. Follow-up with screenshot: Music/Royal (#FF4D4D + #3D5AFE), Bass, Pulse, Gradient — "حتی ی چشمک ساده هم نمیزنه، نور ثابته صورتی" (no reaction to sound at all; constant pink instead of the picked red/blue).
+
+**Root causes found for #5 (verified by `_probe/AudioProbe` — the provider itself is
+HEALTHY: a 220 Hz tone drives level=1.0/bass=1.0 and silence decays to 0 in ~0.6 s):**
+- **The "pink" was BY DESIGN, wrongly:** `AudioMode=pulse` sampled the colouring at ONE
+  fixed point (`pos 0.5`) — the exact midpoint of the red↔blue gradient, i.e. frozen pink
+  for the whole strip. Pulse now TRAVELS the colouring (sin period ~2.4 s), so both picked
+  colours alternate visibly and the beat intensity still breathes the brightness.
+- **`palette` with an empty/invalid CustomPixels silently fell through to the 2-colour
+  gradient** (same pink blend). It now falls back to the red/green/blue default blocks.
+- Screen sampling moved OFF the WASAPI callback thread onto its own `System.Threading.Timer`
+  (a GDI grab inside the audio callback both delays analysis and freezes ambient colour on
+  silence — no callbacks fire when nothing plays).
+
+**Fixes / features (all verified on the real rig):**
+
+1. **Silence decay 5× faster.** The envelope release in `AudioProvider` (level AND the three
+   bands) was `0.15`/analysis-frame ≈ 600 ms to reach the 2 % noise gate; on top of the
+   meter's smoothing the glow lingered 1–2 s. Release is now `0.45` → below the gate in
+   ~5 frames (~120 ms). Attack path unchanged (beats still punch instantly).
+   `--rendertest` §39 asserts decay ≤ 8 frames.
+2. **Palette = discrete BLOCKS, not a blended ramp.** `EffectType.Custom` and the music
+   effect's `AudioColor="palette"` now divide the strip into one solid segment per picked
+   colour (`SampleBlocks`) — red+green+blue shows a red block, a green block, a blue block.
+   Gradient blending still exists for the *gradient* colouring; the palette mode's whole
+   point is "show every colour I picked separately".
+   `--rendertest` §39 asserts a 90-LED strip at Time=0 maps picks 1:1 to thirds.
+3. **NEW `Ambient` effect (16).** The screen is sampled into three horizontal bands
+   (top/middle/bottom) every 80 ms on its own timer thread (`PollScreenColour`,
+   GDI `CopyFromScreen` + `DrawImage` downscale, EMA-smoothed, no elevation); each ZONE
+   paints its band's colour, so multiple strips mirror their part of the display. A single
+   strip shows a vertical gradient across the three bands. No sample yet → dimmed primary.
+4. **NEW `Gaming` effect (17).** Screen-average colour paints the strip; `Beat` flashes it
+   white (`BeatStrength`). No sample yet → primary colour. Tray → **"Gaming lights"**
+   (`ApplyGamingEverywhere`) applies it as per-device overrides for this session without
+   rewriting the profile; the next profile switch restores the profile.
+5. **Round-14 audit P1 fixes are IN:** `RepairStaleEngineTaskAsync` now compares against
+   `EngineBundle.CurrentHash()` (the real bundle SHA, never the vendor folder name), and the
+   splash's async-void `Loaded` catches OCE (closing during the UAC prompt no longer crashes;
+   the post-repair engine restart is skipped when the window is gone). P2s remain open.
+
+**Audio chain proven end-to-end by `_probe/AudioProbe.csproj`** (standalone host of the REAL
+`AudioProvider` + `tone_test.py` WAV): tone → level 1.0 within ~0.6 s, silence → 0.0 in
+~0.6 s, `screenSamples=85` in 12 s. If the live app still shows no reaction, the renderer
+settings (AudioBand/AudioGain) or the running exe build are the suspects, not the provider.
+
+Artifacts: `dist23\FullRGB.exe` (87.3 MB, 14:03 — dist22 is LOCKED by the running old
+instance, per PLAN §7). Gates: rendertest ALL PASSED, uitest ALL PASSED, fxtest dist23
+devices=4 framesSent=724 errors=0.
+
+## 10b. Round 13 (2026-09-06) — v1.2.0: never require Task Manager again
 
 **User report:** "OpenRGB wouldn't close; I killed it from Task Manager and everything worked."
 Diagnosis: a wedged engine holds the SDK port but never answers; `StartAsync` attached on

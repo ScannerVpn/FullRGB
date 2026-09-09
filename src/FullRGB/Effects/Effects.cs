@@ -18,6 +18,9 @@ public enum EffectType
     Scanner = 13,     // ping-pong head with tail (KITT-style bounce, unlike Comet's wrap)
     Sparkle = 14,     // dim base with deterministic twinkles
     Plasma = 15,      // flowing 3-stop gradient blobs
+    // round 14 additions: APPEND-only
+    Ambient = 16,     // every zone samples a DIFFERENT screen colour (per-zone ambient)
+    Gaming = 17,      // screen-average body + white kick-flash on audio hits
 }
 
 /// <summary>Serializable effect definition (stored in profiles).</summary>
@@ -112,6 +115,15 @@ public sealed class EffectContext
     public double AudioLevel;      // 0..1 overall
     public double AudioBass, AudioMid, AudioTreble; // 0..1 bands
     public double Beat;            // 0..1 kick onset envelope
+
+    // Screen sampling: three horizontal bands (top/middle/bottom of the display), each the
+    // smoothed average of its band, 0..1 per channel. Gaming uses the overall average
+    // (ScreenAvg*), Ambient maps zones to the rows. ScreenValid=false = no sample yet.
+    public double ScreenAvgR, ScreenAvgG, ScreenAvgB;
+    public double ScreenRow0R, ScreenRow0G, ScreenRow0B;
+    public double ScreenRow1R, ScreenRow1G, ScreenRow1B;
+    public double ScreenRow2R, ScreenRow2G, ScreenRow2B;
+    public bool ScreenValid;
 }
 
 /// <summary>Stateful music meter state (peak-hold). One per render loop; the renderer is pure otherwise.</summary>
@@ -351,8 +363,20 @@ public static class EffectRenderer
                     break;
                 }
                 var gradStops = BoxStops(e, peak, tailC); // boxes + extras (== old 2-stop ramp when empty)
+                // Palette is parsed ONCE: "palette" with an EMPTY/invalid CustomPixels must not
+                // silently melt into the 2-colour gradient (red+blue midpoint = the pink the
+                // user reported). It falls back to the default red/green/blue blocks instead.
+                bool palRequested = e.AudioColor == "palette";
+                TryPalette(e, out var palStops);
+                var activePal = palRequested && palStops.Length > 0
+                    ? palStops
+                    : palRequested
+                        ? new[] { ParseHex("FF0000", e.Brightness), ParseHex("00FF00", e.Brightness), ParseHex("0000FF", e.Brightness) }
+                        : null;
                 (byte r, byte g, byte b) colorAt(double pos01, double lvl) => e.AudioColor switch                {
-                    "palette" when TryPalette(e, out var stops) && stops.Length > 0 => Sample(stops, pos01),
+                    // Blocks: each picked colour owns an equal segment, so all of them are
+                    // VISIBLY separate (a blended ramp across 3+ picks reads as one mixed hue).
+                    "palette" => activePal is { Length: > 0 } ? SampleBlocks(activePal, pos01) : Sample(gradStops, pos01),
                     "level" => Hsv((1 - Math.Clamp(pos01, 0, 1)) * 0.33, 1.0, e.Brightness),
                     "rainbow" => Hsv(Frac(pos01 * 0.85 + ctx.Time * speed * 0.05), 1.0, e.Brightness),
                     _ => Sample(gradStops, pos01),
@@ -367,8 +391,14 @@ public static class EffectRenderer
                 }
                 if (e.AudioMode == "pulse")
                 {
-                    // whole strip breathes with the music in one level-coloured hue
-                    var (r, g, b) = colorAt(0.5, level);
+                    // Whole strip breathes with the music. OLD BUG the user reported as
+                    // "constant pink instead of blue and red": pulse sampled the colouring at
+                    // ONE point (pos 0.5) — the midpoint of a red↔blue gradient, which IS pink,
+                    // frozen there for the whole strip. Now the pulse Travels through the
+                    // colouring (period ~2.4 s at default speed) so both picked colours show,
+                    // and the chosen colour still tracks the beat intensity.
+                    double travel = 0.5 + 0.5 * Math.Sin(2 * Math.PI * ctx.Time * Math.Max(0.2, speed) * 0.4);
+                    var (r, g, b) = colorAt(travel, level);
                     double k = 0.2 + 0.8 * level;
                     Fill(rgb, Scale(r, k), Scale(g, k), Scale(b, k));
                 }
@@ -518,22 +548,75 @@ public static class EffectRenderer
                 if (pixels.Length == 0) { Fill(rgb, 0, 0, 0); break; }
                 var pal = pixels.Select(p => ParseHex(p, e.Brightness)).ToArray();
                 int L = pal.Length;
-                // Custom indexes the palette with an integer floor, so a time-based per-zone
-                // offset can land on a whole multiple of the palette length and make
-                // "unsynced" look synced. Use the BASE time plus a palette offset that is
-                // guaranteed to be a non-zero residue mod L instead.
+                // "Show every colour I picked": the strip is divided into L equal BLOCKS, one
+                // solid colour each — a red+green+blue pick shows a red block, a green block
+                // and a blue block, not one blended rainbow. (The old per-LED cycling
+                // sampled a multi-stop GRADIENT, so 3 picked colours melted into in-between
+                // mixes and the user read it as "one mixed colour".)
+                // Speed still rotates the whole block pattern around the strip.
                 double shift = ctx.Time * speed * 4.0 * dir;
                 int zoneShift = seed == 0 || L < 2 ? 0 : 1 + (int)(Math.Abs((long)seed) % (L - 1));
                 for (int i = 0; i < ledCount; i++)
                 {
-                    long raw = (long)Math.Floor(i + (double)zoneShift + shift);
+                    long raw = (long)Math.Floor((double)i / Math.Max(1, ledCount) * L + zoneShift + shift);
                     int idx = (int)(((raw % L) + L) % L);
                     Set(rgb, i, pal[idx].r, pal[idx].g, pal[idx].b);
                 }
                 break;
             }
+            case EffectType.Ambient:
+            {
+                // Every ZONE shows its own slice of the screen: the whole screen is sampled
+                // into three horizontal bands each poll, and zone #z takes band z (top→bottom),
+                // so a case with several strips mirrors what is happening in that part of the
+                // display. Smoothed channels keep the light from strobing with video cuts.
+                // No screen sample yet (capture failed / headless): fall back to the primary
+                // colour so the strip is never just dark.
+                if (!ctx.ScreenValid)
+                {
+                    var fc = ParseHex(e.ColorHex, e.Brightness);
+                    Fill(rgb, Scale(fc.r, 0.6), Scale(fc.g, 0.6), Scale(fc.b, 0.6));
+                    break;
+                }
+                var t3 = ContextScreen(ctx);
+                for (int i = 0; i < ledCount; i++)
+                {
+                    // one smooth vertical scan across the zone so a single strip also has a gradient
+                    double k = ledCount <= 1 ? 0 : (double)i / (ledCount - 1);
+                    int row = Math.Clamp((int)(k * 3), 0, 2);
+                    var (r, g, b) = t3[row];
+                    Set(rgb, i, r, g, b);
+                }
+                break;
+            }
+            case EffectType.Gaming:
+            {
+                // The screen's average colour paints the strip; a bass hit flashes white over
+                // it (beat strength 1 = full flash). When no screen sample exists yet, the
+                // primary colour stands in so the strip is never just dark.
+                var (r0, g0, b0) = ctx.ScreenValid
+                    ? ((byte)Math.Clamp((int)Math.Round(((ctx.ScreenRow0R + ctx.ScreenRow1R + ctx.ScreenRow2R) / 3.0) * 255 * e.Brightness), 0, 255),
+                       (byte)Math.Clamp((int)Math.Round(((ctx.ScreenRow0G + ctx.ScreenRow1G + ctx.ScreenRow2G) / 3.0) * 255 * e.Brightness), 0, 255),
+                       (byte)Math.Clamp((int)Math.Round(((ctx.ScreenRow0B + ctx.ScreenRow1B + ctx.ScreenRow2B) / 3.0) * 255 * e.Brightness), 0, 255))
+                    : ParseHex(e.ColorHex, e.Brightness);
+                Fill(rgb, r0, g0, b0);
+                BeatFlash(e, ctx, rgb);
+                break;
+            }
         }
         return rgb;
+    }
+
+    /// <summary>The three screen bands for one frame as (r,g,b) triples (already brightness-scaled).</summary>
+    private static (byte r, byte g, byte b)[] ContextScreen(EffectContext ctx)
+    {
+        byte Scale01(double v) => (byte)Math.Clamp((int)Math.Round(v * 255), 0, 255);
+        return new[]
+        {
+            (Scale01(ctx.ScreenRow0R), Scale01(ctx.ScreenRow0G), Scale01(ctx.ScreenRow0B)),
+            (Scale01(ctx.ScreenRow1R), Scale01(ctx.ScreenRow1G), Scale01(ctx.ScreenRow1B)),
+            (Scale01(ctx.ScreenRow2R), Scale01(ctx.ScreenRow2G), Scale01(ctx.ScreenRow2B)),
+        };
     }
 
     /// <summary>Which audio figure the music effect follows.</summary>
@@ -605,6 +688,17 @@ public static class EffectRenderer
         return (Lerp(stops[i].r, stops[i + 1].r, f),
                 Lerp(stops[i].g, stops[i + 1].g, f),
                 Lerp(stops[i].b, stops[i + 1].b, f));
+    }
+
+    /// <summary>
+    /// Palette as DISCRETE blocks: position 0..1 maps to one whole colour, no blending.
+    /// "I picked red, green and blue" → visibly a red block, a green block, a blue block.
+    /// </summary>
+    private static (byte r, byte g, byte b) SampleBlocks((byte r, byte g, byte b)[] stops, double k)
+    {
+        if (stops.Length == 0) return (0, 0, 0);
+        int idx = Math.Min((int)(Math.Clamp(k, 0, 0.999999) * stops.Length), stops.Length - 1);
+        return stops[idx];
     }
 
     /// <summary>Peak-hold dot: a whitened LED at the recent maximum, past the live edge.</summary>

@@ -47,3 +47,4 @@ AppData/
 
 # Keep vendor but ignore its build temp if any
 vendor/OpenRGB/logs/
+_probe/st_out.txt

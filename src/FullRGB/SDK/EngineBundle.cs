@@ -44,6 +44,28 @@ public static class EngineBundle
     }
 
     /// <summary>
+    /// The 12-hex identity of the embedded bundle (the extraction folder name). This is what
+    /// the engine-task registration must be compared against: the task stores an ABSOLUTE
+    /// exe path under a SHA-keyed folder, so a changed bundle invalidates the task.
+    /// Returns null when this build has no embedded engine (a vendor-folder install must
+    /// NEVER record a "bundle hash" — the folder name there is a constant, not an identity).
+    /// </summary>
+    public static string? CurrentHash()
+    {
+        if (!IsEmbedded) return null;
+        try
+        {
+            using var res = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName);
+            if (res is null) return null;
+            using var mem = new MemoryStream();
+            res.CopyTo(mem);
+            using var sha = SHA256.Create();
+            return Convert.ToHexString(sha.ComputeHash(mem.ToArray()))[..12];
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// Returns the path of the unpacked OpenRGB.exe, unpacking on first call.
     /// Throws only if this build has no embedded bundle at all.
     /// </summary>

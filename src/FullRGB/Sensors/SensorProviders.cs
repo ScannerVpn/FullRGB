@@ -87,6 +87,19 @@ public sealed class AudioProvider : IDisposable
     private readonly object _lock = new();
     private double _level, _bass, _mid, _treble, _beat;
 
+    // Ambient screen colour: the WASAPI callback thread also decimates the screen every
+    // ~80 ms (12 fps is plenty for ambient light; a full 30 fps copy is pointless).
+    // Three horizontal bands (top/middle/bottom), each an EMA-smoothed 0..1 RGB triple.
+    private readonly double[][] _rows = new[]
+    {
+        new double[3], new double[3], new double[3],
+    };
+    private int _screenSamples;             // 0 = never sampled
+    private long _lastScreenPoll;           // Environment.TickCount64 ms of the last grab
+    private const int ScreenPollMs = 80;    // ~12 fps screen sampling
+    private const int ScreenRows = 3;
+    private System.Threading.Timer? _screenTimer;
+
     private readonly double[] _mono = new double[FftSize];
     private readonly double[] _re = new double[FftSize];
     private readonly double[] _im = new double[FftSize];
@@ -126,6 +139,11 @@ public sealed class AudioProvider : IDisposable
             _capture = null;
             throw;
         }
+        // Screen sampling on its OWN timer thread — never inside the WASAPI callback, where a
+        // 2–4 ms GDI grab would delay audio analysis (and a silent PC fires no callbacks at
+        // all, so ambient screen colour would freeze exactly when nothing plays).
+        if (_screenTimer is null)
+            _screenTimer = new System.Threading.Timer(_ => PollScreenColour(), null, 0, ScreenPollMs);
     }
 
     /// <summary>Bytes consumed by one sample frame for a given mix format.</summary>
@@ -170,11 +188,16 @@ public sealed class AudioProvider : IDisposable
         double rms = Math.Sqrt(sumSq / sampleCount);
         // Fast attack + slow release: beats must punch instantly, then fall smoothly.
         // The old symmetric blend smeared kick drums into a blurry glow that felt off-beat.
+        //
+        // Release speed matters as much as attack: 0.15/frame at ~43 analysis frames/s took
+        // ~600 ms to reach the 2 % noise gate after music stopped — the lights kept glowing
+        // 1–2 s after silence. 0.45 falls below the gate in ~5 frames (~120 ms) while still
+        // smoothing the perceptible decay between beats (target 0 = instant would flicker).
         double target = Math.Clamp(rms * 4.0, 0, 1);
         lock (_lock)
             _level = target > _level
                 ? _level * 0.5 + target * 0.5
-                : _level * 0.85 + target * 0.15;
+                : _level * 0.55 + target * 0.45;
     }
 
     private static double ReadSample(byte[] buf, int off, int bytesPerSample, bool isFloat) => bytesPerSample switch
@@ -212,10 +235,13 @@ public sealed class AudioProvider : IDisposable
         double nb = B(bass, nB, 90), nm = B(mid, nM, 220), nt = B(treble, nT, 420);
         lock (_lock)
         {
-            // same fast-attack / slow-release envelope as the overall level
-            _bass = nb > _bass ? _bass * 0.5 + nb * 0.5 : _bass * 0.85 + nb * 0.15;
-            _mid = nm > _mid ? _mid * 0.5 + nm * 0.5 : _mid * 0.85 + nm * 0.15;
-            _treble = nt > _treble ? _treble * 0.5 + nt * 0.5 : _treble * 0.85 + nt * 0.15;
+            // Same fast-attack envelope as the overall level; release 0.45 (not 0.15) so the
+            // bands hit the 2 % noise gate in ~120 ms after the music stops — the slow 0.15
+            // kept the bass bar glowing ~1.5 s into silence, the exact "lights lag the sound"
+            // complaint the overall-level fix answers. Falloff between beats stays smooth.
+            _bass = nb > _bass ? _bass * 0.5 + nb * 0.5 : _bass * 0.55 + nb * 0.45;
+            _mid = nm > _mid ? _mid * 0.5 + nm * 0.5 : _mid * 0.55 + nm * 0.45;
+            _treble = nt > _treble ? _treble * 0.5 + nt * 0.5 : _treble * 0.55 + nt * 0.45;
             // kick onset: instantaneous bass far above its smoothed self = a hit
             if (nb > 0.25 && nb > _bass * 1.35 + 0.08) _beat = 1.0;
             else _beat *= 0.78; // ~90 ms falloff at the ~21 ms analysis rate
@@ -266,6 +292,16 @@ public sealed class AudioProvider : IDisposable
     {
         try
         {
+            if (_screenTimer is not null)
+            {
+                _screenTimer.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                _screenTimer.Dispose();
+            }
+        }
+        catch { }
+        _screenTimer = null;
+        try
+        {
             if (_capture is not null)
             {
                 _capture.DataAvailable -= OnData;
@@ -275,5 +311,79 @@ public sealed class AudioProvider : IDisposable
         }
         catch { }
         _capture = null;
+    }
+
+    // ---------- ambient screen colour (Gaming + Ambient effects) ----------
+
+    /// <summary>
+    /// Grabs the screen, averages it into three horizontal bands and smooths the result.
+    /// Called on the WASAPI callback thread (which already runs whenever audio devices
+    /// produce data) but rate-limited to <see cref="ScreenPollMs"/>.
+    /// GDI CopyFromScreen needs no elevation; one grab per 80 ms is negligible.
+    /// </summary>
+    private void PollScreenColour()
+    {
+        try
+        {
+            long now = Environment.TickCount64;
+            if (now - _lastScreenPoll < ScreenPollMs) return;
+            _lastScreenPoll = now;
+
+            var bounds = System.Windows.Forms.Screen.PrimaryScreen?.Bounds ?? System.Drawing.Rectangle.Empty;
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+            int rowH = Math.Max(1, bounds.Height / ScreenRows);
+            using var full = new System.Drawing.Bitmap(bounds.Width, bounds.Height);
+            using (var g = System.Drawing.Graphics.FromImage(full))
+                g.CopyFromScreen(bounds.X, bounds.Y, 0, 0, bounds.Size);
+
+            double a = 1.0 / Math.Min(_screenSamples + 1, 8);  // converge ~0.6 s, then track at 1/8
+            for (int rI = 0; rI < ScreenRows; rI++)
+            {
+                // one downscaled strip per band: DrawImage averages the whole band into 1×N
+                using var strip = new System.Drawing.Bitmap(1, 8);
+                using (var g = System.Drawing.Graphics.FromImage(strip))
+                    g.DrawImage(full, new System.Drawing.Rectangle(0, 0, 1, 8),
+                                new System.Drawing.Rectangle(0, rI * rowH, bounds.Width, rowH),
+                                System.Drawing.GraphicsUnit.Pixel);
+                double rr = 0, gg = 0, bb = 0;
+                for (int y = 0; y < 8; y++)
+                {
+                    var c = strip.GetPixel(0, y);
+                    rr += c.R; gg += c.G; bb += c.B;
+                }
+                rr /= 2040.0; gg /= 2040.0; bb /= 2040.0;   // 8 × 255
+                _rows[rI][0] += (rr - _rows[rI][0]) * a;
+                _rows[rI][1] += (gg - _rows[rI][1]) * a;
+                _rows[rI][2] += (bb - _rows[rI][2]) * a;
+            }
+            _screenSamples++;
+        }
+        catch { /* screen capture is best-effort (locked desktop, RDP, headless) */ }
+    }
+
+    /// <summary>Probe hook: how many screen samples have landed (0 = capture not working).</summary>
+    public int ScreenSamples => _screenSamples;
+
+    /// <summary>
+    /// Copies the smoothed band colours into the context. Returns false until at least one
+    /// screen grab has completed (the renderer then falls back to the primary colour).
+    /// Lock-free: the writer only ever assigns whole doubles and the renderer tolerates a
+    /// torn mix of two consecutive samples (both are valid smoothed colours).
+    /// </summary>
+    public bool FillScreenContext(Effects.EffectContext ctx)
+    {
+        if (_screenSamples == 0) return false;
+        for (int rI = 0; rI < ScreenRows; rI++)
+        {
+            double r = _rows[rI][0], g = _rows[rI][1], b = _rows[rI][2];
+            switch (rI)
+            {
+                case 0: ctx.ScreenRow0R = r; ctx.ScreenRow0G = g; ctx.ScreenRow0B = b; break;
+                case 1: ctx.ScreenRow1R = r; ctx.ScreenRow1G = g; ctx.ScreenRow1B = b; break;
+                case 2: ctx.ScreenRow2R = r; ctx.ScreenRow2G = g; ctx.ScreenRow2B = b; break;
+            }
+        }
+        return true;
     }
 }

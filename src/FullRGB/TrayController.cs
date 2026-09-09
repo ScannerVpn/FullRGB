@@ -22,6 +22,9 @@ public sealed class TrayController : IDisposable
     private ToolStripMenuItem _blackoutItem = null!;
     private ToolStripMenuItem _profilesItem = null!;
     private ToolStripMenuItem _exitItem = null!;
+    private ToolStripMenuItem _gamingItem = null!;
+    /// <summary>Kept as a field so Dispose can actually unsubscribe it (a fresh lambda cannot).</summary>
+    private readonly System.ComponentModel.CancelEventHandler _openingHandler;
 
     /// <summary>Invoked when the user picks start/stop effects. Argument: true = start.</summary>
     public Action<bool>? ToggleEffects { get; set; }
@@ -30,6 +33,8 @@ public sealed class TrayController : IDisposable
     public Func<bool>? IsEffectsRunning { get; set; }
     public Func<IEnumerable<string>>? ProfileNames { get; set; }
     public Func<string>? ActiveProfile { get; set; }
+    /// <summary>True = switch every paintable zone to the Gaming effect (tray quick-toggle).</summary>
+    public Action? GamingOn { get; set; }
     /// <summary>Real application exit (the window's close button only hides to tray).</summary>
     public Action? ExitApp { get; set; }
 
@@ -53,7 +58,8 @@ public sealed class TrayController : IDisposable
             ContextMenuStrip = _menu,
         };
         _icon.DoubleClick += (_, _) => Restore();
-        _menu.Opening += (_, _) => Sync();
+        _openingHandler = (_, _) => Sync();
+        _menu.Opening += _openingHandler;
     }
 
     /// <summary>
@@ -91,10 +97,12 @@ public sealed class TrayController : IDisposable
 
     private void BuildMenu()
     {
-        // Dispose old items: Sync() clears DropDownItems on every right-click, leaking handles.
-        foreach (System.Windows.Forms.ToolStripItem it in _menu.Items)
-            try { it.Dispose(); } catch { }
+        // Dispose old items — but AFTER clearing: Dispose() removes the item from its owning
+        // collection, so disposing during foreach threw "Collection was modified" the moment
+        // the user right-clicked the tray icon while the menu was opening.
+        var old = _menu.Items.OfType<System.Windows.Forms.ToolStripItem>().ToArray();
         _menu.Items.Clear();
+        foreach (var it in old) try { it.Dispose(); } catch { }
         _menu.RightToLeft = L10n.IsRtl ? RightToLeft.Yes : RightToLeft.No;
 
         var header = new ToolStripMenuItem(L10n.T("tray.title")) { Enabled = false };
@@ -115,6 +123,11 @@ public sealed class TrayController : IDisposable
         _blackoutItem = new ToolStripMenuItem(L10n.T("btn.blackout"), null, (_, _) => Blackout?.Invoke());
         _menu.Items.Add(_blackoutItem);
 
+        // Gaming quick-toggle: one click switches the whole rig to the screen-mirror effect
+        // (and back to the profile) without opening the window — the "start playing NOW" path.
+        _gamingItem = new ToolStripMenuItem(L10n.T("tray.gaming"), null, (_, _) => GamingOn?.Invoke());
+        _menu.Items.Add(_gamingItem);
+
         _profilesItem = new ToolStripMenuItem(L10n.T("profile"));
         _menu.Items.Add(_profilesItem);
 
@@ -131,22 +144,28 @@ public sealed class TrayController : IDisposable
     /// <summary>Refreshes labels + the profile submenu right before the menu opens.</summary>
     private void Sync()
     {
-        bool running = IsEffectsRunning?.Invoke() ?? false;
-        _toggleItem.Text = running ? L10n.T("btn.stopEffects") : L10n.T("btn.startEffects");
-
-        foreach (System.Windows.Forms.ToolStripItem it in _profilesItem.DropDownItems)
-            try { it.Dispose(); } catch { }
-        _profilesItem.DropDownItems.Clear();
-        var names = ProfileNames?.Invoke()?.ToList() ?? new List<string>();
-        var active = ActiveProfile?.Invoke();
-        foreach (var name in names)
+        try
         {
-            var item = new ToolStripMenuItem(name) { Checked = name == active, CheckOnClick = false };
-            var captured = name;
-            item.Click += (_, _) => SelectProfile?.Invoke(captured);
-            _profilesItem.DropDownItems.Add(item);
+            bool running = IsEffectsRunning?.Invoke() ?? false;
+            _toggleItem.Text = running ? L10n.T("btn.stopEffects") : L10n.T("btn.startEffects");
+
+            // Clear FIRST, dispose the snapshot afterwards: dropping items while enumerating
+            // the live collection is exactly what crashed the menu open (see BuildMenu).
+            var old = _profilesItem.DropDownItems.OfType<System.Windows.Forms.ToolStripItem>().ToArray();
+            _profilesItem.DropDownItems.Clear();
+            foreach (var it in old) try { it.Dispose(); } catch { }
+            var names = ProfileNames?.Invoke()?.ToList() ?? new List<string>();
+            var active = ActiveProfile?.Invoke();
+            foreach (var name in names)
+            {
+                var item = new ToolStripMenuItem(name) { Checked = name == active, CheckOnClick = false };
+                var captured = name;
+                item.Click += (_, _) => SelectProfile?.Invoke(captured);
+                _profilesItem.DropDownItems.Add(item);
+            }
+            _profilesItem.Enabled = names.Count > 0;
         }
-        _profilesItem.Enabled = names.Count > 0;
+        catch { /* a broken menu refresh must never crash the menu open */ }
     }
 
     /// <summary>Re-labels everything after a language switch.</summary>
@@ -179,8 +198,7 @@ public sealed class TrayController : IDisposable
         _disposed = true;
         try
         {
-            _menu.Opening -= (_, _) => Sync();
-            _icon.DoubleClick -= (_, _) => Restore();
+            if (_openingHandler is not null) _menu.Opening -= _openingHandler;
         }
         catch { }
         Icon? icon = null;

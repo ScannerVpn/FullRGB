@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -71,6 +72,7 @@ public partial class MainWindow : Window
                 if (Headless) { BuildEffectEditor(); LoadProfileToUi(); BuildDevicePicker(); TickPreview(); return; }
                 InitTray();   // tray icon exists for the whole session, not only when minimised
                 StartAutomation();
+                HookPowerEvents();
                 if (_client is { Connected: true }) OnConnected();
                 else await ConnectAsync();
             }
@@ -114,6 +116,76 @@ public partial class MainWindow : Window
         try { _fgTimer?.Stop(); } catch { }
         _schedTimer = null;
         _fgTimer = null;
+    }
+
+    // ---------- power resume (sleep / hibernate) ----------
+
+    private bool _powerHooked;
+    private bool _resuming;
+
+    /// <summary>
+    /// After sleep/hibernate the hardware is reset to its firmware modes and the SDK session
+    /// is stale: OpenRGB's device handles died with the suspend, the engine keeps painting
+    /// into dead sockets (or into a server that no longer drives anything), so the profile
+    /// silently stopped being applied and the user had to press Rescan by hand. Hook the OS
+    /// resume notification and do the equivalent automatically.
+    /// </summary>
+    private void HookPowerEvents()
+    {
+        if (_powerHooked) return;
+        _powerHooked = true;
+        try { SystemEvents.PowerModeChanged += OnPowerModeChanged; } catch { }
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume) return;
+        try
+        {
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            Dispatcher.BeginInvoke(async () => { try { await ResumeAsync(); } catch { } });
+        }
+        catch { }
+    }
+
+    /// <summary>Full re-apply after wake: revive the engine if it died, then rescan and restart effects.</summary>
+    private async Task ResumeAsync()
+    {
+        if (_resuming || _reallyExiting || _osShuttingDown) return;
+        _resuming = true;
+        try
+        {
+            // USB/SMBus re-enumeration takes a few seconds after resume; a scan before that
+            // finds nothing and would look like the bug we are fixing.
+            await Task.Delay(4000);
+            if (_reallyExiting || _osShuttingDown || !IsLoaded) return;
+
+            bool alive = _mgr is not null && await _mgr.SdkAliveAsync();
+            if (!alive && (_client is not null || _mgr is not null))
+            {
+                SetStatus(L10n.T("status.starting"), StatusKind.Busy);
+                try { _engine?.Stop(); } catch { }
+                try { _engine?.Dispose(); } catch { }
+                _engine = null;
+                try { _client?.Dispose(); } catch { }
+                _client = null;
+                try
+                {
+                    _mgr ??= new OpenRgbProcessManager(OpenRgbProcessManager.DefaultExePath(), App.Settings.ServerPort);
+                    // An engine started by the elevated task survives a plain Stop(); end that
+                    // instance first (no UAC) so RestartAsync cannot re-attach to a corpse.
+                    if (_mgr.AttachedToExisting) Setup.EngineTask.EndTaskInstance();
+                    await _mgr.RestartAsync();
+                }
+                catch { }
+            }
+            if (_reallyExiting || _osShuttingDown) return;
+            await RescanAsync();
+        }
+        finally
+        {
+            _resuming = false;
+        }
     }
 
     // ---------- connection ----------
@@ -440,6 +512,7 @@ public partial class MainWindow : Window
                 catch { }
             }),
             Blackout = () => Dispatcher.BeginInvoke(() => { try { Blackout_Click(this, new RoutedEventArgs()); } catch { } }),
+            GamingOn = () => Dispatcher.BeginInvoke(() => { try { ApplyGamingEverywhere(); } catch { } }),
             ProfileNames = () => App.Settings.Profiles.Select(p => p.Name).ToList(),
             ActiveProfile = () => CurrentProfile().Name,
             SelectProfile = name => Dispatcher.BeginInvoke(() => { try { SwitchProfile(name); } catch { } }),
@@ -455,6 +528,37 @@ public partial class MainWindow : Window
     {
         InitTray();
         Hide();
+    }
+
+    /// <summary>
+    /// Tray "Gaming lights": every paintable zone switches to the Gaming effect (screen
+    /// mirror + hit flash) for THIS session, overriding the profile without rewriting it.
+    /// The user gets instant game-reactive lighting; the next profile switch returns to it.
+    /// </summary>
+    private void ApplyGamingEverywhere()
+    {
+        var profile = CurrentProfile();
+        var gaming = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.Gaming,
+            ColorHex = profile.GlobalEffect.ColorHex,   // no-screen fallback keeps the profile's colour
+            Brightness = profile.GlobalEffect.Brightness,
+            BeatStrength = 1.0,
+            SyncZones = true,
+        };
+        foreach (var dev in _client?.Controllers ?? Enumerable.Empty<SDK.RgbController>())
+            profile.DeviceOverrides[dev.Key] = EffectEngine.Clone(gaming);
+        _target = TargetMode.Device;   // the editor shows the override target, not the global effect
+        _selectedKey = null;
+        _selectedZone = -1;
+        _edit = EffectEngine.Clone(gaming);
+        _engine?.Apply(profile);
+        SetStatus(L10n.T("tray.gaming"), StatusKind.Ok);
+        BuildDeviceList();
+        BuildDevicePicker();
+        BuildEffectEditor();
+        RefreshStatus();
+        SyncRunButtons();
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -484,6 +588,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
         try { StopPreview(); } catch { }
         StopAutomation();
         try { _engineWatchdog?.Stop(); } catch { }
