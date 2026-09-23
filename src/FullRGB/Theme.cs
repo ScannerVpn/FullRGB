@@ -19,14 +19,15 @@ public static class Theme
     /// <summary>Accent presets offered in Settings (first entry is the default).</summary>
     public static readonly (string Name, string Hex)[] Accents =
     {
-        ("Cyan",   "#00E5FF"),
-        ("Violet", "#7C4DFF"),
-        ("Pink",   "#FF4D8D"),
-        ("Green",  "#3DDC97"),
-        ("Amber",  "#FFB01F"),
-        ("Red",    "#FF5C6C"),
-        ("Blue",   "#4D8DFF"),
-        ("White",  "#E8EFF6"),
+        ("Violet",  "#A487EF"),
+        ("Lavender","#B39ADF"),
+        ("Cyan",    "#72D7E7"),
+        ("Pink",    "#D2A6F1"),
+        ("Green",   "#68D5AF"),
+        ("Amber",   "#FFB01F"),
+        ("Red",     "#FF5C6C"),
+        ("Blue",    "#69BCF4"),
+        ("White",   "#E8EFF6"),
     };
 
     public static Color Parse(string hex, Color fallback)
@@ -50,16 +51,16 @@ public static class Theme
     {
         var app = Application.Current;
         if (app is null) return;
-        var accent = Parse(hex, Color.FromRgb(0x00, 0xE5, 0xFF));
+        var accent = Parse(hex, Color.FromRgb(0xA4, 0x87, 0xEF));
 
         Set("Accent", new SolidColorBrush(accent));
         // dim: the accent over the app background, used for selected chips/rows
-        Set("AccentDim", new SolidColorBrush(Mix(accent, Color.FromRgb(0x08, 0x0A, 0x0F), 0.84)));
+        Set("AccentDim", new SolidColorBrush(Mix(accent, Color.FromRgb(0x0E, 0x0E, 0x13), 0.78)));
         Set("AccentSoft", new SolidColorBrush(Color.FromArgb(0x22, accent.R, accent.G, accent.B)));
         // text drawn ON the accent fill: dark for bright accents, light for dark ones
         Set("OnAccent", new SolidColorBrush(Luminance(accent) > 0.5
             ? Mix(accent, Colors.Black, 0.85)
-            : Color.FromRgb(0xF2, 0xF8, 0xFF)));
+            : Color.FromRgb(0xF2, 0xEC, 0xFF)));
 
         var fill = new LinearGradientBrush
         {

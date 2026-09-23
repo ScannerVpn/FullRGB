@@ -4,54 +4,185 @@
              ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
 
-    <!-- ══════════════════ palette ══════════════════
+    <!-- ══════════════════ palette (arena FullRGB purple-dark) ══════════════════
          Accent* brushes are MUTATED at runtime (Theme.ApplyAccent) so the user can
          recolour the whole UI; never freeze them and never inline the accent hex. -->
-    <SolidColorBrush x:Key="Bg"          Color="#080A0F"/>
-    <SolidColorBrush x:Key="BgElevated"  Color="#0D111A"/>
-    <SolidColorBrush x:Key="Card"        Color="#121822"/>
-    <SolidColorBrush x:Key="CardHover"   Color="#18202C"/>
-    <SolidColorBrush x:Key="Surface"     Color="#1A2331"/>
-    <SolidColorBrush x:Key="SurfaceHi"   Color="#222E3F"/>
-    <SolidColorBrush x:Key="Border"      Color="#243040"/>
-    <SolidColorBrush x:Key="BorderSoft"  Color="#18202B"/>
-    <SolidColorBrush x:Key="Text"        Color="#EAF1F8"/>
-    <SolidColorBrush x:Key="Muted"       Color="#8593A4"/>
-    <SolidColorBrush x:Key="Faint"       Color="#556274"/>
-    <SolidColorBrush x:Key="Accent"      Color="#00E5FF"/>
-    <SolidColorBrush x:Key="AccentSoft"  Color="#1A00E5FF" Opacity="1"/>
-    <SolidColorBrush x:Key="AccentDim"   Color="#0B2D36"/>
-    <SolidColorBrush x:Key="Violet"      Color="#7C4DFF"/>
-    <SolidColorBrush x:Key="Pink"        Color="#FF4D8D"/>
+    <SolidColorBrush x:Key="Bg"          Color="#0E0E13"/>
+    <SolidColorBrush x:Key="BgElevated"  Color="#121217"/>
+    <SolidColorBrush x:Key="Card"        Color="#16161E"/>
+    <SolidColorBrush x:Key="CardHover"   Color="#1B1923"/>
+    <SolidColorBrush x:Key="Surface"     Color="#1B1822"/>
+    <SolidColorBrush x:Key="SurfaceHi"   Color="#221B2C"/>
+    <SolidColorBrush x:Key="Border"      Color="#282831"/>
+    <SolidColorBrush x:Key="BorderSoft"  Color="#25232B"/>
+    <SolidColorBrush x:Key="Text"        Color="#E0D8EE"/>
+    <SolidColorBrush x:Key="Muted"       Color="#98939F"/>
+    <SolidColorBrush x:Key="Faint"       Color="#6B6575"/>
+    <SolidColorBrush x:Key="Accent"      Color="#A487EF"/>
+    <SolidColorBrush x:Key="AccentSoft"  Color="#1AA487EF" Opacity="1"/>
+    <SolidColorBrush x:Key="AccentDim"   Color="#281E37"/>
+    <SolidColorBrush x:Key="Violet"      Color="#946CFF"/>
+    <SolidColorBrush x:Key="Pink"        Color="#D2A6F1"/>
     <SolidColorBrush x:Key="Warn"        Color="#FFC24D"/>
     <SolidColorBrush x:Key="WarnBg"      Color="#241E12"/>
     <SolidColorBrush x:Key="Danger"      Color="#FF5C6C"/>
     <SolidColorBrush x:Key="DangerBg"    Color="#251317"/>
-    <SolidColorBrush x:Key="Ok"          Color="#3DDC97"/>
-    <SolidColorBrush x:Key="OnAccent"    Color="#04222A"/>
+    <SolidColorBrush x:Key="Ok"          Color="#68D5AF"/>
+    <SolidColorBrush x:Key="OnAccent"    Color="#1A1024"/>
+
+    <!-- brand mark fill: arena gradient violet → purple → cyan -->
+    <LinearGradientBrush x:Key="BrandMark" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#CF80ED" Offset="0"/>
+      <GradientStop Color="#946CFF" Offset="0.48"/>
+      <GradientStop Color="#72D7E7" Offset="1"/>
+    </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="BrandGrad" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#00E5FF" Offset="0"/>
-      <GradientStop Color="#7C4DFF" Offset="0.55"/>
-      <GradientStop Color="#FF4D8D" Offset="1"/>
+      <GradientStop Color="#A487EF" Offset="0"/>
+      <GradientStop Color="#946CFF" Offset="0.55"/>
+      <GradientStop Color="#72D7E7" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="AccentFill" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#00C2D9" Offset="0"/>
-      <GradientStop Color="#00E5FF" Offset="1"/>
+      <GradientStop Color="#8D59E7" Offset="0"/>
+      <GradientStop Color="#A487EF" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- window backdrop: a very soft accent bloom in the top-left, dark everywhere else -->
-    <RadialGradientBrush x:Key="AppBackdrop" GradientOrigin="0.12,0.02" Center="0.12,0.02"
+    <!-- window backdrop: soft purple bloom, dark everywhere else -->
+    <RadialGradientBrush x:Key="AppBackdrop" GradientOrigin="0.78,0.02" Center="0.78,0.02"
                          RadiusX="1.05" RadiusY="0.9">
-      <GradientStop Color="#141C2A" Offset="0"/>
-      <GradientStop Color="#080A0F" Offset="0.75"/>
+      <GradientStop Color="#1A1428" Offset="0"/>
+      <GradientStop Color="#0E0E13" Offset="0.75"/>
     </RadialGradientBrush>
 
     <LinearGradientBrush x:Key="CardGrad" StartPoint="0,0" EndPoint="0,1">
-      <GradientStop Color="#141B26" Offset="0"/>
-      <GradientStop Color="#10161F" Offset="1"/>
+      <GradientStop Color="#18161F" Offset="0"/>
+      <GradientStop Color="#14131B" Offset="1"/>
     </LinearGradientBrush>
+
+    <!-- lighting hero: arena hero-panel radial + linear -->
+    <LinearGradientBrush x:Key="HeroGrad" StartPoint="0,0" EndPoint="1,0.6">
+      <GradientStop Color="#1C1828" Offset="0"/>
+      <GradientStop Color="#17151F" Offset="0.66"/>
+      <GradientStop Color="#19151F" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- active nav fill: soft purple wash -->
+    <LinearGradientBrush x:Key="NavActiveFill" StartPoint="0,0" EndPoint="1,0">
+      <GradientStop Color="#198D59E7" Offset="0"/>
+      <GradientStop Color="#298D59E7" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- arena heading-action buttons -->
+    <LinearGradientBrush x:Key="RingRainbow" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#9470FF" Offset="0"/>
+      <GradientStop Color="#FA66CE" Offset="0.2"/>
+      <GradientStop Color="#FF7D99" Offset="0.4"/>
+      <GradientStop Color="#FFD699" Offset="0.55"/>
+      <GradientStop Color="#98EDC0" Offset="0.7"/>
+      <GradientStop Color="#67D7F2" Offset="0.85"/>
+      <GradientStop Color="#8174FF" Offset="1"/>
+    </LinearGradientBrush>
+
+    <Style x:Key="ProfileSelectBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#B4ADBF"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Padding" Value="12,8"/>
+      <Setter Property="MinHeight" Value="37"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="#1B1922" BorderBrush="#34303E" BorderThickness="1"
+                    CornerRadius="7" Padding="{TemplateBinding Padding}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="&#xE736;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                           Foreground="#AC8DD8" VerticalAlignment="Center"/>
+                <ContentPresenter Margin="8,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                           Foreground="#787080" VerticalAlignment="Center"/>
+              </StackPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#272131"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="PowerBtn" TargetType="Button">
+      <Setter Property="Width" Value="38"/>
+      <Setter Property="Height" Value="38"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="#1E1A23" BorderBrush="#38313E" BorderThickness="1"
+                    CornerRadius="7">
+              <TextBlock x:Name="ico" Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15"
+                         Foreground="#7B7085" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#3E2A51"/>
+              </Trigger>
+              <Trigger Property="Tag" Value="on">
+                <Setter TargetName="bd" Property="Background" Value="#55281E35"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#5E5D3F76"/>
+                <Setter TargetName="ico" Property="Foreground" Value="#C39AF5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="SaveProfileBtnStyle" TargetType="Button">
+      <Setter Property="Foreground" Value="#C9ACEB"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="#1A8D62C4" BorderBrush="#5D427A" BorderThickness="1"
+                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#2BA473D6"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#A67CD1"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="TextLinkBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#AC91CE"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <ContentPresenter/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="#D0B0F5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
 
     <!-- ══════════════════ typography ══════════════════ -->
     <Style x:Key="H1" TargetType="TextBlock">
@@ -80,10 +211,10 @@
     <!-- ══════════════════ card ══════════════════ -->
     <Style x:Key="CardBd" TargetType="Border">
       <Setter Property="Background" Value="{StaticResource CardGrad}"/>
-      <Setter Property="BorderBrush" Value="{StaticResource BorderSoft}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="CornerRadius" Value="16"/>
-      <Setter Property="Padding" Value="15,13"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="18,16"/>
     </Style>
 
     <!-- ══════════════════ chip (radio) ══════════════════ -->
@@ -118,11 +249,10 @@
       </Setter>
     </Style>
 
-    <!-- effect tile: a bigger chip with an icon over a label, used on the Lighting page.
-         No fixed Width: it lives in a UniformGrid and stretches to fill its cell. -->
+    <!-- effect tile: arena .effect-card — icon art over a label, 4-column grid -->
     <Style x:Key="FxTile" TargetType="RadioButton">
       <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
-      <Setter Property="Margin" Value="0,0,7,7"/>
+      <Setter Property="Margin" Value="0,0,8,8"/>
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -130,20 +260,21 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="bd" Background="{StaticResource Surface}"
-                    BorderBrush="{StaticResource Border}" BorderThickness="1"
-                    CornerRadius="12" Padding="9,9" SnapsToDevicePixels="True">
+            <Border x:Name="bd" Background="#1B1822"
+                    BorderBrush="#302B37" BorderThickness="1"
+                    CornerRadius="7" Padding="0" SnapsToDevicePixels="True">
               <ContentPresenter/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{StaticResource SurfaceHi}"/>
+                <Setter TargetName="bd" Property="Background" Value="#221B2C"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#665079"/>
                 <Setter Property="Foreground" Value="{StaticResource Text}"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentDim}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-                <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+                <Setter TargetName="bd" Property="Background" Value="#281E37"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#AD80EE"/>
+                <Setter Property="Foreground" Value="#D4CADA"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -152,36 +283,28 @@
       </Setter>
     </Style>
 
-    <!-- device row: a full-width selectable card -->
+    <!-- device row: arena device-mini -->
     <Style x:Key="DeviceRow" TargetType="RadioButton">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="Margin" Value="0,0,0,7"/>
+      <Setter Property="Margin" Value="0,0,0,8"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="bd" Background="{StaticResource Surface}"
-                    BorderBrush="{StaticResource Border}" BorderThickness="1"
-                    CornerRadius="13" Padding="11,10" SnapsToDevicePixels="True">
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="3"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Border x:Name="rail" Grid.Column="0" Width="3" CornerRadius="2"
-                        Background="Transparent" Margin="0,1,10,1"/>
-                <ContentPresenter Grid.Column="1" VerticalAlignment="Center"/>
-              </Grid>
+            <Border x:Name="bd" Background="#1B1822"
+                    BorderBrush="#2D2835" BorderThickness="1"
+                    CornerRadius="7" Padding="12,10" SnapsToDevicePixels="True">
+              <ContentPresenter VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{StaticResource CardHover}"/>
+                <Setter TargetName="bd" Property="Background" Value="#211C2B"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#59456A"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentDim}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-                <Setter TargetName="rail" Property="Background" Value="{DynamicResource Accent}"/>
+                <Setter TargetName="bd" Property="Background" Value="#281E37"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#AD80EE"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -209,7 +332,7 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{StaticResource SurfaceHi}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#33455A"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{StaticResource Bg}"/>
@@ -430,7 +553,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="#33455A"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
               </Trigger>
               <Trigger Property="IsFocused" Value="True">
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}"/>
@@ -440,7 +563,7 @@
                    dropping both made the field read as "failed to render" rather than "locked". -->
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="Transparent"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#232F3E"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#302B37"/>
                 <Setter Property="Foreground" Value="{StaticResource Muted}"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -504,7 +627,7 @@
                     </Border>
                     <ControlTemplate.Triggers>
                       <Trigger Property="IsMouseOver" Value="True">
-                        <Setter TargetName="bd" Property="BorderBrush" Value="#33455A"/>
+                        <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
                       </Trigger>
                       <Trigger Property="IsChecked" Value="True">
                         <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}"/>
@@ -589,7 +712,7 @@
                   <Thumb>
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Border x:Name="tb" Background="#2B3745" CornerRadius="4" Width="5"/>
+                        <Border x:Name="tb" Background="#3A3348" CornerRadius="4" Width="5"/>
                         <ControlTemplate.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="tb" Property="Background" Value="{DynamicResource Accent}"/>
@@ -687,40 +810,49 @@
       </Setter>
     </Style>
 
-    <!-- ══════════════════ side nav rail item ══════════════════ -->
+    <!-- ══════════════════ sidebar nav item (arena .nav-item) ══════════════════ -->
     <Style x:Key="NavTab" TargetType="RadioButton">
-      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
-      <Setter Property="FontSize" Value="9.5"/>
+      <Setter Property="Foreground" Value="#98939F"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="Medium"/>
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Margin" Value="0,0,0,6"/>
+      <Setter Property="Margin" Value="0,0,0,7"/>
+      <Setter Property="Height" Value="46"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
             <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="3"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <Border x:Name="rail" Grid.Column="0" Width="3" CornerRadius="2"
-                      Background="Transparent" Margin="0,7"/>
-              <Border x:Name="bd" Grid.Column="1" Background="Transparent" CornerRadius="12"
-                      Padding="0,9" Margin="4,0,6,0">
-                <StackPanel>
-                  <TextBlock x:Name="ico" Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets"
-                             FontSize="16" HorizontalAlignment="Center"/>
-                  <ContentPresenter HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                </StackPanel>
+              <Border x:Name="bd" Background="Transparent" CornerRadius="7"
+                      BorderThickness="1" BorderBrush="Transparent"
+                      Padding="13,0" SnapsToDevicePixels="True">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock x:Name="ico" Grid.Column="0" Text="{TemplateBinding Tag}"
+                             FontFamily="Segoe MDL2 Assets" FontSize="16"
+                             Foreground="#898591" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                  <ContentPresenter Grid.Column="1" VerticalAlignment="Center"
+                                    HorizontalAlignment="Left"/>
+                </Grid>
               </Border>
+              <!-- accent bar on the physical end edge (left under RTL) -->
+              <Border x:Name="rail" Width="3" Height="24" CornerRadius="2"
+                      Background="Transparent" HorizontalAlignment="Right" Margin="0,0,-1,0"/>
             </Grid>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{StaticResource Surface}"/>
-                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                <Setter TargetName="bd" Property="Background" Value="#1B1923"/>
+                <Setter Property="Foreground" Value="#E0D8EE"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentDim}"/>
-                <Setter TargetName="rail" Property="Background" Value="{DynamicResource Accent}"/>
-                <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+                <Setter TargetName="bd" Property="Background" Value="{StaticResource NavActiveFill}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#209B65DD"/>
+                <Setter TargetName="ico" Property="Foreground" Value="#B68EEC"/>
+                <Setter TargetName="rail" Property="Background" Value="#B390F4"/>
+                <Setter Property="Foreground" Value="#C4A7FF"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
               </Trigger>
             </ControlTemplate.Triggers>

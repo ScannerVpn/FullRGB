@@ -81,18 +81,18 @@ public static class UiTests
 
         Check("theme: accent applies to live brushes", () =>
         {
-            Theme.ApplyAccent("#FF00AA");
+            Theme.ApplyAccent("#A487EF");
             var b = (System.Windows.Media.SolidColorBrush)Application.Current.FindResource("Accent");
-            if (b.Color.R != 0xFF || b.Color.B != 0xAA)
+            if (b.Color.R != 0xA4 || b.Color.B != 0xEF)
                 throw new InvalidOperationException($"accent brush not updated: {b.Color}");
-            Theme.ApplyAccent("#00E5FF");
+            Theme.ApplyAccent("#A487EF");
         });
 
         Check("MainWindow: XAML loads and lays out", () =>
         {
             var w = new MainWindow();
-            w.Measure(new Size(560, 700));
-            w.Arrange(new Rect(0, 0, 560, 700));
+            w.Measure(new Size(1280, 900));
+            w.Arrange(new Rect(0, 0, 1280, 900));
             w.Close();
         });
 
@@ -128,8 +128,8 @@ public static class UiTests
             {
                 L10n.Set(l);
                 var w = new MainWindow();
-                w.Measure(new Size(560, 700));
-                w.Arrange(new Rect(0, 0, 560, 700));
+                w.Measure(new Size(1280, 900));
+                w.Arrange(new Rect(0, 0, 1280, 900));
                 w.Close();
             });
         }

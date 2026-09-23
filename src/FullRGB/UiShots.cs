@@ -25,16 +25,16 @@ public static class UiShots
         try
         {
             var win = new MainWindow();
-            Shoot(win, 560, 700, Path.Combine(outDir, "main-lighting.png"));
+            Shoot(win, 1280, 900, Path.Combine(outDir, "main-lighting.png"));
 
             win.ShowDevicesTabForShot();
-            Shoot(win, 560, 700, Path.Combine(outDir, "main-devices.png"));
+            Shoot(win, 1280, 900, Path.Combine(outDir, "main-devices.png"));
 
             win.ShowHardwareTabForShot();
-            Shoot(win, 560, 700, Path.Combine(outDir, "main-hardware.png"));
+            Shoot(win, 1280, 900, Path.Combine(outDir, "main-hardware.png"));
 
             win.ShowSettingsTabForShot();
-            Shoot(win, 560, 700, Path.Combine(outDir, "main-settings.png"));
+            Shoot(win, 1280, 900, Path.Combine(outDir, "main-settings.png"));
             win.Close();
 
             var startup = new StartupWindow();

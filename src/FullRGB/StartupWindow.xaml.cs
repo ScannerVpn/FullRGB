@@ -114,6 +114,11 @@ public partial class StartupWindow : Window
             else Log(L10n.T("scan.dep.optional", dep.Name, dep.Why), (Brush)FindResource("Faint"));
         }
 
+        // The parts this machine showed last time are known before the engine has answered, so say
+        // so up front. The same list is what lets the detect loop below finish early.
+        if (App.DeviceCache is { Devices.Count: > 0 } known)
+            Log(L10n.T("scan.cached", known.Devices.Count), (Brush)FindResource("Faint"));
+
         await ContinueToEngineAsync();
     }
 
@@ -153,9 +158,14 @@ public partial class StartupWindow : Window
         // At Windows logon (autostart) the USB stack is still enumerating, so the first
         // answer is often 0 devices. That 0 must NEVER count as "stable" — otherwise we
         // conclude after ~2s with an empty list and the user has to press Rescan by hand.
+        //
+        // The settle wait is the one part we can shorten honestly: with a remembered inventory we
+        // know which devices to expect, and the poll loop below verifies it, so there is nothing
+        // to gain from a flat 5 s sleep. Without one, keep the conservative wait.
+        int remembered = App.DeviceCache?.Devices.Count ?? 0;
         try
         {
-            await Task.Delay(Manager.AttachedToExisting ? 500 : 5000, _cts.Token);
+            await Task.Delay(Manager.AttachedToExisting ? 500 : (remembered > 0 ? 1500 : 5000), _cts.Token);
         }
         catch (OperationCanceledException) { return; }
         try
@@ -214,7 +224,10 @@ public partial class StartupWindow : Window
                         Log("engine: " + re.Message, (Brush)FindResource("Danger"));
                     }
                 }
-                if (now > 0 && stable >= 2 && i >= 4) break;
+                // A remembered inventory is a free oracle: if the count stopped growing AND is
+                // exactly what we expect, waiting for the i >= 4 floor buys no information.
+                // A partial answer never matches, so a cold boot still gets the full window.
+                if (now > 0 && stable >= 2 && (i >= 4 || now == remembered)) break;
             }
         }
         catch (Exception e)
@@ -228,12 +241,25 @@ public partial class StartupWindow : Window
         foreach (var dev in Client.Controllers)
             Log($"• {dev.Name} — {dev.Zones.Count} zones");
 
+        // Name the parts that answered last time but not now. Their settings are deliberately kept
+        // (see Profile.PruneTo), so this answers "where did my fan go?" without implying loss.
+        if (App.DeviceCache is { Devices.Count: > 0 } cache)
+        {
+            var missing = cache.MissingFrom(Client.Controllers);
+            if (missing.Count > 0)
+                Log(L10n.T("scan.cachedMissing", string.Join(", ", missing)), (Brush)FindResource("Warn"));
+        }
+
         // ---- 4. expand addressable zones (this is what makes effects visible) ----
         Stage(L10n.T("scan.step.zones"));
         var profile = App.Settings.Profiles.FirstOrDefault(p => p.Name == App.Settings.ActiveProfile)
                       ?? App.Settings.Profiles[0];
         await Task.Run(() => Client!.ExpandAllZones(_cts.Token, (d, z) => profile.ZoneSize(d, z)), _cts.Token);
         await Task.Run(() => Client!.EnsureDirectMode(), _cts.Token);
+
+        // Remember the inventory for the next launch. Merge, never replace: a device that stayed
+        // silent this time keeps its identity (and therefore its settings) until it ages out.
+        App.RememberDevices(Client.Controllers);
 
         int totalLeds = Client.Controllers.Sum(c => c.LedCount);
         Stage(L10n.T("scan.step.done", Client.Controllers.Count, totalLeds), 100);

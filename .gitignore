@@ -3,6 +3,7 @@ bin/
 obj/
 dist*/
 publish/
+installer/Output/
 *.user
 *.suo
 .vs/
