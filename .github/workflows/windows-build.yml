@@ -77,13 +77,33 @@ jobs:
             }
           }
 
+      - name: Headless diagnostics gate
+        shell: pwsh
+        run: |
+          # --export-diagnostics exercises the round-21 bug-report zip end to end (support
+          # matrix, engine log tail, settings snapshot) with no RGB hardware and no GUI.
+          $exe = "src/FullRGB/bin/Debug/net8.0-windows/win-x64/FullRGB.exe"
+          $zip = "$env:RUNNER_TEMP\diag.zip"
+          $out = "$env:RUNNER_TEMP\diag.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList "--export-diagnostics=$zip" `
+                 -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
+          if (-not $p.WaitForExit(120000)) { try { $p.Kill() } catch {}; throw "diagnostics gate timed out" }
+          if ($p.ExitCode -ne 0) { throw "diagnostics gate exit code $($p.ExitCode)" }
+          if (-not (Test-Path $zip)) { throw "diagnostics zip was not created" }
+          Write-Host "diag zip: $((Get-Item $zip).Length) bytes"
+          if ((Get-Item $zip).Length -lt 200) { throw "diagnostics zip suspiciously small" }
+          Write-Host ([System.IO.File]::ReadAllText($out))
+
       - name: Publish single-file exe
         shell: pwsh
         run: |
           $ver = "${{ inputs.tag }}"
           if ($ver.StartsWith('v')) { $ver = $ver.Substring(1) }
-          if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '1.0.0' }
-          dotnet publish src/FullRGB/FullRGB.csproj -c Release -r win-x64 -p:PublishDir="${{ github.workspace }}\dist\" -p:Version="$ver" --nologo
+          # Only stamp -p:Version for a tagged release build; otherwise the csproj version
+          # (1.6.0) must win — a hard-coded fallback would mislabel every push artifact.
+          $verArgs = @()
+          if (-not [string]::IsNullOrWhiteSpace($ver)) { $verArgs += @("-p:Version=$ver") }
+          dotnet publish src/FullRGB/FullRGB.csproj -c Release -r win-x64 -p:PublishDir="${{ github.workspace }}\dist\" @verArgs --nologo
 
       - name: Verify the engine really is embedded
         shell: pwsh

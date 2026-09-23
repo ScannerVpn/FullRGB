@@ -1,0 +1,50 @@
+name: Bug report
+description: Something broke that is not a per-device compatibility question
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please attach the diagnostics zip** — Hardware → *Export diagnostics* — or run
+        `FullRGB.exe --export-diagnostics` and drop the file here. Without it most hardware
+        reports take several round-trips to even describe the machine.
+  - type: input
+    id: version
+    attributes:
+      label: FullRGB version
+      validations:
+        required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start FullRGB
+        2. Select Wave effect
+        3. ...
+  - type: dropdown
+    id: repeat
+    attributes:
+      label: How often does it happen?
+      options:
+        - Always
+        - Sometimes
+        - Once
+        - Only after sleep/wake
+        - Only after reboot
+    validations:
+      required: true
+  - type: textarea
+    id: zip
+    attributes:
+      label: Diagnostics zip
+      description: Drag the zip here, or say why you cannot share it.
+    validations:
+      required: false

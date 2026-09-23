@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using FullRGB.Config;
 using FullRGB.Diag;
 using Brush = System.Windows.Media.Brush;
 using Button = System.Windows.Controls.Button;
@@ -57,6 +58,271 @@ public partial class MainWindow
         AddGroup(L10n.T("hw.needsAction"), report.Where(r => r.State == SupportState.NeedsElevation), "Warn");
         AddGroup(L10n.T("hw.unsupported"), report.Where(r => r.State == SupportState.Unsupported), "Faint");
         AddGroup(L10n.T("hw.unknown"), report.Where(r => r.State == SupportState.Unknown), "Faint");
+
+        HwList.Children.Add(BuildCommunityHidCard(report));
+    }
+
+    /// <summary>
+    /// Community protocols for driverless mice/keeps: import a shared JSON definition, probe
+    /// read-only, and — only behind two explicit confirmations plus the global switch — paint
+    /// one solid colour. The card also annotates the unsupported rows that have a protocol.
+    /// </summary>
+    private Border BuildCommunityHidCard(List<PeripheralReport> report)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Header(L10n.T("hid.title")));
+        panel.Children.Add(Line(L10n.T("hid.explain"), "Muted"));
+
+        var (protocols, errors) = Hid.CommunityStore.Load();
+        var hid = Hid.HidBridge.Enumerate();
+
+        foreach (var proto in protocols)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var info = new StackPanel();
+            string mode = proto.ExperimentalWrite ? L10n.T("hid.modeWrite") : L10n.T("hid.modeRead");
+            info.Children.Add(new TextBlock
+            {
+                Text = $"{proto.Name}  ·  {proto.VidPid}",
+                Style = (Style)FindResource("Txt"),
+                FontSize = 11.5,
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = $"{proto.Source}  ·  {mode}  ·  sha256:{proto.Sha256}",
+                Style = (Style)FindResource("FaintTxt"),
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 1, 0, 0),
+            });
+            Grid.SetColumn(info, 0);
+            row.Children.Add(info);
+
+            var actions = new StackPanel { Orientation = Orientation.Horizontal };
+            var probeBtn = new Button
+            {
+                Style = (Style)FindResource("Btn"),
+                Content = L10n.T("hid.probe"),
+                FontSize = 11,
+                Margin = new Thickness(0, 0, 6, 0),
+            };
+            var p = proto;
+            probeBtn.Click += (_, _) => ProbeCommunityDevice(p, hid);
+            actions.Children.Add(probeBtn);
+            if (p.Paint is not null)
+            {
+                var paintBtn = new Button
+                {
+                    Style = (Style)FindResource("Btn"),
+                    Content = L10n.T("hid.paint"),
+                    FontSize = 11,
+                    Foreground = (Brush)FindResource("Warn"),
+                };
+                paintBtn.Click += (_, _) => TestPaintCommunity(p, hid, probeBtn);
+                actions.Children.Add(paintBtn);
+            }
+            Grid.SetColumn(actions, 1);
+            row.Children.Add(actions);
+            panel.Children.Add(row);
+        }
+
+        foreach (var err in errors)
+            panel.Children.Add(Line(L10n.T("hid.badFile", err), "Warn"));
+
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        var importBtn = new Button
+        {
+            Style = (Style)FindResource("Btn"),
+            Content = L10n.T("hid.import"),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        importBtn.Click += (_, _) => ImportCommunityProtocol();
+        btnRow.Children.Add(importBtn);
+        var folderBtn = new Button
+        {
+            Style = (Style)FindResource("Btn"),
+            Content = L10n.T("hid.folder"),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        folderBtn.Click += (_, _) =>
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(Hid.CommunityStore.Dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Hid.CommunityStore.Dir)
+                { UseShellExecute = true });
+            }
+            catch { }
+        };
+        btnRow.Children.Add(folderBtn);
+        var writeToggle = new Button
+        {
+            Style = (Style)FindResource("Btn"),
+            Content = App.Settings.HidExperimentalWrite ? L10n.T("hid.writeOn") : L10n.T("hid.writeOff"),
+            FontSize = 11,
+            Foreground = (Brush)FindResource(App.Settings.HidExperimentalWrite ? "Warn" : "Muted"),
+            ToolTip = L10n.T("hid.writeTip"),
+        };
+        writeToggle.Click += (_, _) =>
+        {
+            try
+            {
+                if (!App.Settings.HidExperimentalWrite)
+                {
+                    if (!ConfirmDialog.Ask(this, L10n.T("hid.writeWarn1"), L10n.T("hid.writeContinue"), danger: true))
+                        return;
+                    if (PromptDialog.Ask(this, L10n.T("hid.writeWarn2"), "") is not { } typed
+                        || !typed.Trim().Equals("FULLRGB", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SetStatus(L10n.T("hid.writeCancelled"), StatusKind.Warn);
+                        return;
+                    }
+                    App.Settings.HidExperimentalWrite = true;
+                    Diag.AppLog.Warn("community HID experimental WRITES enabled by the user");
+                }
+                else
+                {
+                    App.Settings.HidExperimentalWrite = false;
+                    Diag.AppLog.Info("community HID experimental writes disabled");
+                }
+                ProfileStore.Save(App.Settings);
+                SetStatus(L10n.T(App.Settings.HidExperimentalWrite ? "hid.writeOn" : "hid.writeOff"), StatusKind.Info);
+                BuildHardwarePage();
+            }
+            catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+        };
+        btnRow.Children.Add(writeToggle);
+        panel.Children.Add(btnRow);
+
+        // Annotate unsupported rows that a community protocol covers, right in the group list.
+        foreach (var r in report.Where(r => r.State == SupportState.Unsupported))
+        {
+            var proto = Hid.CommunityStore.Find(protocols, ParseVid(r.VidPid), ParsePid(r.VidPid));
+            if (proto is null) continue;
+            panel.Children.Add(Line(L10n.T("hid.covers", r.VidPid, proto.Name), "Ok"));
+        }
+
+        return new Border
+        {
+            Style = (Style)FindResource("CardBd"),
+            Margin = new Thickness(0, 0, 0, 10),
+            Child = panel,
+        };
+    }
+
+    private static ushort ParseVid(string vidpid)
+        => ushort.TryParse((vidpid ?? "").Split(':').FirstOrDefault(), System.Globalization.NumberStyles.HexNumber, null, out var v) ? v : (ushort)0;
+    private static ushort ParsePid(string vidpid)
+        => ushort.TryParse((vidpid ?? "").Split(':').Skip(1).FirstOrDefault(), System.Globalization.NumberStyles.HexNumber, null, out var p) ? p : (ushort)0;
+
+    /// <summary>Best HID collection for a protocol: usagePage/usage match first, then any collection of that VID:PID.</summary>
+    private static Hid.HidBridge.HidCollection? FindCollection(Hid.HidProtocolFile proto,
+        List<Hid.HidBridge.HidCollection> hid, int? usagePage = null, int? usage = null)
+        => hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum
+                                   && (usagePage is null || c.UsagePage == usagePage)
+                                   && (usage is null || c.Usage == usage))
+           ?? hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum);
+
+    /// <summary>READ-ONLY probe: one feature report, logged and shown in the status line.</summary>
+    private void ProbeCommunityDevice(Hid.HidProtocolFile proto, List<Hid.HidBridge.HidCollection> hid)
+    {
+        try
+        {
+            var col = FindCollection(proto, hid, proto.Probe?.UsagePage, proto.Probe?.Usage);
+            if (col is null)
+            {
+                SetStatus(L10n.T("hid.deviceNotFound", proto.VidPid), StatusKind.Warn);
+                return;
+            }
+            var probe = proto.Probe ?? new Hid.HidProbe { ReportId = 0, Length = 8 };
+            var (data, error) = Hid.HidBridge.Probe(col, probe.ReportId, probe.Length);
+            if (data is null)
+            {
+                Diag.AppLog.Warn($"community probe {proto.VidPid}: {error}");
+                SetStatus(L10n.T("hid.probeFailed", error), StatusKind.Error);
+                return;
+            }
+            string hex = string.Join(" ", data.Take(32).Select(b => b.ToString("X2")));
+            Diag.AppLog.Info($"community probe {proto.VidPid} {col.Path}: {hex}");
+            SetStatus(L10n.T("hid.probeOk", hex), StatusKind.Ok);
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Exception("community probe", e);
+            SetStatus(L10n.T("status.failed", e.Message), StatusKind.Error);
+        }
+    }
+
+    /// <summary>
+    /// One guarded test paint (solid colour from the current profile). Requires the global
+    /// experimental-write switch AND a fresh double confirmation EVERY click — the device
+    /// firmware is unknown to us, and this is exactly the "guessed SET_FEATURE payload" risk
+    /// the README warns about, offered only to users who know why they want it.
+    /// </summary>
+    private void TestPaintCommunity(Hid.HidProtocolFile proto, List<Hid.HidBridge.HidCollection> hid, Button owner)
+    {
+        try
+        {
+            if (!App.Settings.HidExperimentalWrite)
+            {
+                SetStatus(L10n.T("hid.writeNeeded"), StatusKind.Warn);
+                return;
+            }
+            if (!ConfirmDialog.Ask(this, L10n.T("hid.paintWarn", proto.Name), L10n.T("hid.paintContinue"), danger: true))
+                return;
+            var col = FindCollection(proto, hid, proto.Paint?.UsagePage, proto.Paint?.Usage);
+            if (col is null)
+            {
+                SetStatus(L10n.T("hid.deviceNotFound", proto.VidPid), StatusKind.Warn);
+                return;
+            }
+            PushEdit();
+            string hex = CurrentProfile().GlobalEffect.ColorHex;
+            var color = (System.Drawing.Color)new System.Drawing.ColorConverter().ConvertFromString(hex)!;
+            var (ok, error) = Hid.HidBridge.PaintSolid(col, proto, color);
+            if (ok)
+            {
+                Diag.AppLog.Info($"community test paint {proto.VidPid} {hex}");
+                SetStatus(L10n.T("hid.paintOk", proto.VidPid), StatusKind.Ok);
+            }
+            else
+            {
+                Diag.AppLog.Warn($"community paint {proto.VidPid}: {error}");
+                SetStatus(L10n.T("hid.probeFailed", error), StatusKind.Error);
+            }
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Exception("community paint", e);
+            SetStatus(L10n.T("status.failed", e.Message), StatusKind.Error);
+        }
+    }
+
+    /// <summary>Validates then copies a shared protocol file into the store.</summary>
+    private void ImportCommunityProtocol()
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.OpenFileDialog { Filter = "Protocol JSON|*.json" };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            var proto = Hid.CommunityStore.Import(dlg.FileName, out var error);
+            if (proto is null)
+            {
+                SetStatus(L10n.T("hid.badFile", error), StatusKind.Error);
+                return;
+            }
+            Diag.AppLog.Info($"community protocol imported: {proto.Name} ({proto.VidPid})");
+            SetStatus(L10n.T("hid.imported", proto.Name), StatusKind.Ok);
+            BuildHardwarePage();
+        }
+        catch (Exception e)
+        {
+            SetStatus(L10n.T("hid.badFile", e.Message), StatusKind.Error);
+        }
     }
 
     /// <summary>Card describing the bundled engine: what it is, where it runs, how it was started.</summary>
@@ -151,6 +417,16 @@ public partial class MainWindow
             finally { updBtn.IsEnabled = true; }
         };
         rowBtns.Children.Add(updBtn);
+        var zipBtn = new Button
+        {
+            Style = (Style)FindResource("Btn"),
+            Content = L10n.T("hw.exportDiagnostics"),
+            FontSize = 11,
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = L10n.T("hw.exportDiagnosticsTip"),
+        };
+        zipBtn.Click += (_, _) => ExportDiagnostics_Click();
+        rowBtns.Children.Add(zipBtn);
         panel.Children.Add(rowBtns);
 
         return new Border
@@ -159,6 +435,29 @@ public partial class MainWindow
             Margin = new Thickness(0, 0, 0, 10),
             Child = panel,
         };
+    }
+
+    /// <summary>Builds the bug-report zip next to where the user picks and says where it went.</summary>
+    private void ExportDiagnostics_Click()
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.SaveFileDialog
+            {
+                Filter = "Zip|*.zip",
+                FileName = $"FullRGB-diagnostics-{DateTime.Now:yyyyMMdd-HHmm}.zip",
+            };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            var controllers = _client?.Controllers;
+            string path = Diag.DiagnosticsExport.Build(dlg.FileName,
+                () => Diag.DiagnosticsExport.SupportMatrixText(controllers));
+            Diag.AppLog.Info("diagnostics exported: " + path);
+            SetStatus(L10n.T("hw.diagnosticsDone"), StatusKind.Ok);
+        }
+        catch (Exception e)
+        {
+            SetStatus(L10n.T("status.failed", e.Message), StatusKind.Error);
+        }
     }
 
     /// <summary>Bundled OpenRGB.exe version (ProductVersion), or "" when unavailable.</summary>

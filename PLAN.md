@@ -1,13 +1,13 @@
 # FullRGB — PLAN.md
 
-**Last updated:** 2026-09-23 (round 20: the machine watches itself — an independent frame watchdog catches a stalled session after sleep/wake/power-loss and rebuilds it without the user; round 18: a real per-user Inno Setup installer; round 17: v1.5.0 — the device inventory is remembered, so a launch no longer rescans from scratch; round 16: the lighting rebuilds itself after sleep/hibernate; round 15: v1.4.0 — arena UI redesign ported, review defects fixed, Persian-first defaults)
+**Last updated:** 2026-09-23 (round 21: v1.6.0 — the app becomes controllable and self-defending: local automation bus (CLI + named pipe + HTTP + mobile companion), engine safe mode with backoff, GitHub-Releases auto-update with a verified atomic swap, diagnostics zip export, GamePulse game-event effect, time-of-day scheduling, profile share codes, guarded community HID protocol system, full community docs; round 20: the machine watches itself — an independent frame watchdog catches a stalled session after sleep/wake/power-loss and rebuilds it without the user; round 18: a real per-user Inno Setup installer; round 17: v1.5.0 — the device inventory is remembered, so a launch no longer rescans from scratch; round 16: the lighting rebuilds itself after sleep/hibernate; round 15: v1.4.0 — arena UI redesign ported, review defects fixed, Persian-first defaults)
 **Repo root:** `G:\Ai\RGB Control` (git since v1.0; pushed to `main` @ `9de3102` = round 20 + missing `DeviceCache.cs`)
-**Status:** WORKING and verified on the real rig.
+**Status:** WORKING on the real rig. Round 21 is code-complete AND compile-verified (2026-09-23: full Release build with the .NET 8 SDK cross-targeting the Windows TFM — **0 errors, 0 warnings**; fixes applied: HID `?? return` → pattern match, raw-string opener, ref-readonly GUID, ambiguous WPF/WinForms names, missing usings, out-param capture, stackalloc-in-async, CS4014 wake-rescan). Still to run on a Windows box/CI: the behaviour gates (`--rendertest` sections 46–51, `--uitest`, `--export-diagnostics`, pipe/HTTP round-trip) — see §Round 21 "verification checklist".
 
 | Gate | Command | Latest result |
 |---|---|---|
-| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (round 20 Debug build, 230 asserts, +44) |
-| UI (XAML/resources/glyphs/l10n/bundle/USB) | `FullRGB.exe --uitest` | **ALL UI TESTS PASSED** (round 20 Debug build) |
+| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (round 20 Debug build, 230 asserts, +44; round 21 adds sections 46–51: schedule rules, profile share, game events, dispatcher, HID validation, updater compare) |
+| UI (XAML/resources/glyphs/l10n/bundle/USB) | `FullRGB.exe --uitest` | **ALL UI TESTS PASSED** (round 20 Debug build; round 21 adds Settings cards + GamePulse chip — expect this gate to re-verify them) |
 | Stall recovery (real rig) | `FullRGB.exe --stalltest --seconds=120` | **watchdog acted by itself at 20 s; frames 784→3608; hardware updating again: True** |
 | Real hardware | `FullRGB.exe --fxtest --seconds=14` | **devices=4, framesSent=1684, errors=0** (dist29 — not re-run in round 16: the user's GUI was running and holds the SDK session) |
 | Engine task | `FullRGB.exe --enginetask=status` | `registered=True matchesThisInstall=True pawnio=True elevated=False` |
@@ -18,15 +18,117 @@
 run there. `dist34` = v1.5.1 (round 19; see §10e below).
 **NOT released:** the latest GitHub release is still **v1.3.0** and no `v1.4.x` tag exists on the
 remote (verified 2026-09-22 18:35 with `gh release list` + `git ls-remote --tags`).
-Round-12 features: Spectrum/Scanner/Sparkle/Plasma effects, music shapes (bar/mirror/pulse/dots)
-+ colourings (gradient/palette/level/rainbow), peak-hold, background colour, sensitivity + beat-flash,
-12 presets, palette + extra-colour editors, rotation scheduler, per-app profiles, per-zone calibration,
-settings backup/export/import, engine version + hardware report + upstream update check.
-CI lesson: redirected stdout encoding differs per runner (UTF-16LE vs UTF-8) — the workflow
-sniffs NUL density instead of assuming; the FAIL veto anchors on `^[FAIL]`/`TEST(S) FAILED`
-because test names contain "failure". Old `dist12`–`dist14` pruned; `dist15` kept as fallback.
 
-This document is self-contained: an agent can continue from it without reading the codebase first.
+---
+
+## Round 21 (2026-09-23) — v1.6.0: controllable, self-defending, community-ready
+
+Scope: all fourteen asks from the maintainer — five technical (automation, HID community
+protocols, auto-update, engine rollback/safe-mode, exportable diagnostics), five user-facing
+(game/media sync, scheduler, per-app profiles polish, profile share, mobile companion), four
+docs/community items. Code-complete in this tree; compile-verified 2026-09-23 (Release, 0 errors / 0 warnings) — behaviour gates still need a Windows session or the CI runner.
+
+### New files (all in `src/FullRGB/` unless noted)
+
+| File | What it is |
+|---|---|
+| `Automation/IControlTarget.cs` | the command surface the bus drives (implemented by MainWindow) |
+| `Automation/CommandDispatcher.cs` | ONE parser/executor: `set-profile`, `set-effect`, `set-color[2]`, `set-brightness`, `set-speed`, `power`, `blackout`, `game-event`, `rescan`, `status`, `profiles`, `help`, `version` |
+| `Automation/ControlHub.cs` | named pipe `fullrgb-ctrl` (one request per connection) + raw-`TcpListener` HTTP server (no HttpListener ACL prompt); token auth, PIN→token exchange with a 5/min brute-force gate; `SendOneShot` is the CLI's pipe client |
+| `Companion/CompanionPage.cs` | embedded single-page mobile UI (en/fa, RTL, dark): PIN modal, profiles, power, brightness/speed, effect+colour, game-event tester |
+| `Update/AppUpdater.cs` | GitHub Releases check (24 h cadence) → download with progress → SHA-256+size+MZ verify → `pending.json` → atomic self-swap at next start (rename running exe→`.old`, move new in, relaunch) |
+| `Diag/AppLog.cs` | rolling in-app log (600-line ring + `logs\app-YYYYMMDD.log`, 14-day retention) |
+| `Diag/DiagnosticsExport.cs` | the bug-report zip (system / controllers / support-matrix / app-log / engine-log / settings / report); also `SupportMatrixText()` shared by UI and `--export-diagnostics` |
+| `Hid/CommunityProtocols.cs` | `fullrgb.hid/1` JSON model + strict validation (schema, hex VID/PID, 8–64-byte reports, "must do something") + store under `%APPDATA%\FullRGB\hid\` |
+| `Hid/HidBridge.cs` | minimal Win32 HID surface: SetupAPI interface enumeration, attributes/caps, one GET_FEATURE probe, one guarded SET_FEATURE solid paint — nothing else |
+| `Setup/EngineSafeMode.cs` | crash-loop bookkeeping: 3 engine replacements in 10 min ⇒ unsafe; backoff 30/60/120/300 s; enter/exit state machine |
+| `Config/ScheduleRules.cs` | `Mo-Fr 22:00-07:00=Night` parser/evaluator (overnight ranges wrap midnight; first match wins) |
+| `Config/ProfileShare.cs` | single-profile JSON envelope + `FRGB1-…` short code (gzip+base64url) + name dedupe |
+| `Sensors/GameEventState.cs` | lock-free game-event state (hp 0..1/0..100, hit envelope, death hold) fed by the bus, read by the renderer |
+| `MainWindow.Automation.cs` | IControlTarget implementation, hub lifecycle, time-schedule tick, safe-mode wiring + banner, updater UI, pending-CLI replay |
+| `docs/` (repo root) | Jekyll docs site: index, automation, scheduling, hid-protocols, troubleshooting, diagnostics, examples; `docs-site.yml` workflow publishes it |
+| `.github/ISSUE_TEMPLATE/` | device-report / bug / feature / question forms |
+| `COMPATIBILITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md` | community layer |
+| `docs/screenshots/hero-banner.png` | generated banner (placeholder until `--uishot` captures are committed) |
+
+### Changed files
+
+- `Effects/Effects.cs`: `GamePulse = 18` (APPEND-ONLY, serialized as numbers!), game fields on
+  `EffectContext`, the GamePulse renderer (danger↔healthy body + hit flash + death hold;
+  AudioMode reused for solid/bar/dots styles).
+- `Effects/EffectEngine.cs` + `MainWindow.Effects.cs` (preview): fill `GameEventState.Fill(ctx)`.
+- `MainWindow.Effects.cs`: GamePulse catalog chip (vector ECG path — no MDL2 dependency) + params.
+- `MainWindow.xaml`: safe-mode banner; Settings cards for time schedule / companion / updates /
+  profile share buttons; "Add current app".
+- `MainWindow.xaml.cs`: hub + schedule + updater start in `Loaded`; `OnSessionHealthy()` +
+  `ApplyPendingCommand()` in `OnConnected`; `NoteEngineReplaced()` on the watchdog's engine
+  verdict; safe-mode exits on any healthy reading; effects.count derived from the catalog.
+- `MainWindow.Settings.cs`: profile share handlers, `FgAddCurrent_Click`, LoadProfileToUi
+  covers the new cards.
+- `MainWindow.Hardware.cs`: Export diagnostics button; the whole Community protocols card
+  (import/probe/test-paint/write toggle with typed double confirmation).
+- `App.xaml.cs`: `--help/--version`, automation verbs (`TryBuildAutomationCommand` → pipe
+  one-shot, or parked in `App.PendingCommandVerb` for the no-instance case), `--export-diagnostics`,
+  update swap before the single-instance mutex.
+- `Config/ProfileStore.cs`: new settings (`AutoUpdateEnabled`, `LastUpdateCheckUtc`,
+  `ControlApiEnabled`, `ControlApiPort`, `CompanionEnabled`, `TimeScheduleEnabled`,
+  `TimeScheduleRules`, `HidExperimentalWrite`) + normalization.
+- `L10n.cs`: ~90 new keys in BOTH en and fa (MissingKeys gate would fail otherwise).
+- `FullRGB.csproj`: version 1.6.0.
+
+### Design decisions worth remembering
+
+- **One command set, three transports.** The CLI does not implement its own logic; it builds a
+  dispatcher command. Same for HTTP routes. Testing the dispatcher (rendertest §49) covers all.
+- **TcpListener, not HttpListener** for the HTTP API: non-localhost prefixes need an ACL
+  grant (netsh) which would break the "no admin" promise; a 200-line raw parser with a 64 KB
+  body cap is the trade.
+- **Token, even on loopback.** A browser-resident attacker could otherwise POST to
+  `127.0.0.1:9372` (CSRF/DNS-rebinding). `/api/health` is the only unauthenticated route
+  besides the page and the PIN exchange; `/api/auth` is throttled 5 tries/min.
+- **The updater verifies BEFORE recording `pending.json`** (size floor 5 MB, `MZ` header,
+  SHA-256) and re-verifies the hash at swap time; owner/repo and asset name `FullRGB.exe` are
+  compile-time constants. The swap is a rename (legal on a running exe) + move + relaunch.
+- **Safe mode parks on a STATIC dim accent colour** — never an animation, which would look
+  like "still working". The user's profile name is captured and restored by `Exit()`.
+- **HID writes are triple-gated by design** (file declares + global typed switch + per-paint
+  typed confirm), and the payload shape is constrained to `id + prefix + N×RGB + zeros` —
+  no arbitrary bytes. The store re-validates every file on every load.
+- **GamePulse is event-driven, not screen-driven.** The screen already has Ambient/Gaming;
+  events need no per-game SDK and work from any HTTP-capable tool.
+
+### Verification checklist for the next Windows session (step 1 done via cross-compile)
+
+1. ~~`dotnet build -c Debug`~~ — **DONE 2026-09-23, better than planned**: full Release
+   cross-compile with the real .NET 8 SDK (`-p:EnableWindowsTargeting`) → 0 errors, 0 warnings
+   after fixing 4 syntax roots (HID `?? return`, RenderTests raw string + shadowed `back`,
+   HID ref-readonly GUID) and 13 semantic ones (ambiguous WPF/WinForms `Clipboard`/`Application`,
+   missing usings, properties as `out`, private-set from sibling class, out-param captured by a
+   local function, `stackalloc` in async, CS4014 on the wake-rescan). The name-collision worry
+   with `MainWindow.Automation.cs` did not materialise.
+2. `bash tools/verify.sh Debug` — rendertest now has sections 46–51; uitest re-checks the new
+   XAML names (`TimeSchedChk`, `CompanionChk`, `UpdateChk`, `SafeModeBanner`, …) and the new
+   l10n keys (both languages). The CI workflow runs this gate on every push.
+3. `FullRGB.exe --help`, `--version`, `--status` (no instance), `--export-diagnostics=test.zip`
+   — the diagnostics verb is now ALSO a CI gate (`windows-build.yml`, Headless diagnostics gate).
+4. With the GUI running: pipe test (`Send-FullRGB "set-profile gaming"` from docs), HTTP
+   status/profile/event round-trip with the token file, companion page on a phone.
+5. `--game-event hit` against a rig with the GamePulse effect selected.
+6. Update flow: publish a fake higher release in a fork, point nothing — the repo URL is
+   compiled in — so verify CheckAsync against the real repo's releases only; the swap path is
+   best exercised by hand-crafting `pending.json` + a copy of the exe.
+7. HID: import `docs/examples/casue-keyboard.probe.example.json`, Probe (read) with the rig's
+   CASUE keyboard (`2A7A:939F`).
+
+### Known limitations to state, not fix silently
+
+- The companion page has no QR code (a QR encoder would need a dependency; the URL+PIN is
+  copyable instead). mDNS discovery is likewise not included — the Settings card lists the LAN URLs.
+- Community protocols paint solid colours only (one report), and are not wired into the
+  EffectEngine loop yet — deliberate: many OEM firmwares only accept slow polled writes, and
+  streaming to them without capacity probing would repeat the Commander Core stall story.
+- The time schedule and the rotation scheduler can both fire; the time rule wins its tick and
+  the rotation countdown resets on any switch (documented in docs/scheduling.md).
 
 ---
 

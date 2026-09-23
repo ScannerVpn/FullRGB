@@ -1,0 +1,328 @@
+using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace FullRGB.Update;
+
+/// <summary>What the latest GitHub Release offers, parsed from the API.</summary>
+public sealed class UpdateInfo
+{
+    [JsonPropertyName("version")] public string Version { get; set; } = "";
+    [JsonPropertyName("notes")] public string Notes { get; set; } = "";
+    [JsonPropertyName("asset_url")] public string AssetUrl { get; set; } = "";
+    [JsonPropertyName("html_url")] public string HtmlUrl { get; set; } = "";
+    [JsonPropertyName("published_at")] public string PublishedAt { get; set; } = "";
+}
+
+/// <summary>A download that waits to be swapped in on the next start.</summary>
+public sealed class PendingUpdate
+{
+    [JsonPropertyName("version")] public string Version { get; set; } = "";
+    [JsonPropertyName("file")] public string File { get; set; } = "";
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("downloaded_at")] public string DownloadedAt { get; set; } = "";
+}
+
+/// <summary>
+/// Auto-update for a single-file exe, end to end:
+///   1. CHECK — GitHub Releases API (repos/ScannerVpn/FullRGB/releases/latest), 24 h cadence,
+///      only when AutoUpdateEnabled; the tag must look newer than the running version.
+///   2. DOWNLOAD — the FullRGB.exe asset goes to %LOCALAPPDATA%\FullRGB\update\, then the file's
+///      SHA-256 and version are stored in pending.json (the swap is atomic, so the hash must be
+///      fixed BEFORE the swap decision, not after).
+///   3. APPLY — at the NEXT start (ApplyPendingOnStartup runs before anything touches the engine):
+///      rename the running exe to FullRGB.exe.old (a running exe CAN be renamed on Windows),
+///      move the downloaded file into its place, relaunch, exit. The .old file is cleaned up by
+///      the new instance; stale downloads are pruned every start.
+///
+/// Security posture: HTTPS only, the owner/repo is a compile-time constant (an attacker cannot
+/// repoint the check without rebuilding), the asset must be named FullRGB.exe, must start with
+/// the MZ PE header and must pass its recorded SHA-256 before being swapped in.
+/// </summary>
+public static class AppUpdater
+{
+    public const string Repo = "ScannerVpn/FullRGB";
+    private const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
+
+    public static string UpdateDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                     "FullRGB", "update");
+    private static string PendingPath => Path.Combine(UpdateDir, "pending.json");
+
+    private static readonly HttpClient Http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+    };
+
+    public static string CurrentVersion()
+        => System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
+
+    // ------------------------------------------------------------------ check
+
+    /// <summary>Latest release, or null (offline / no release / no usable asset). Never throws.</summary>
+    public static async Task<UpdateInfo?> CheckAsync()
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, ApiUrl);
+            req.Headers.UserAgent.ParseAdd("FullRGB-update-check");
+            req.Headers.Accept.ParseAdd("application/vnd.github+json");
+            using var resp = await Http.SendAsync(req).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            string json = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            string tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() ?? "" : "";
+            string notes = root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
+            string html = root.TryGetProperty("html_url", out var htmlEl) ? htmlEl.GetString() ?? "" : "";
+            string published = root.TryGetProperty("published_at", out var pubEl) ? pubEl.GetString() ?? "" : "";
+
+            if (!IsNewer(CurrentVersion(), tag.TrimStart('v', 'V'))) return null;
+
+            string? assetUrl = null;
+            long assetSize = 0;
+            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in assets.EnumerateArray())
+                {
+                    string name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    if (!name.Equals("FullRGB.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                    assetUrl = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                    assetSize = a.TryGetProperty("size", out var s) && s.TryGetInt64(out var l) ? l : 0;
+                    break;
+                }
+            }
+            if (string.IsNullOrEmpty(assetUrl))
+            {
+                // Fallback: the legacy "source exe attached to the release body" layout is not
+                // supported — a release without the exe asset simply means "no update offered".
+                return null;
+            }
+            var info = new UpdateInfo
+            {
+                Version = tag.TrimStart('v', 'V'),
+                Notes = notes.Length > 4000 ? notes[..4000] + "…" : notes,
+                AssetUrl = assetUrl,
+                HtmlUrl = html,
+                PublishedAt = published,
+            };
+            return info;
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Warn("update check failed: " + e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Numeric compare "1.6.0" vs "1.5.1"; any non-numeric suffix (rc1, beta) is ignored.
+    /// Equality counts as "not newer" so a re-published tag does not loop.</summary>
+    public static bool IsNewer(string current, string latest)
+    {
+        try
+        {
+            var c = current.Split('.');
+            var l = latest.Split('.');
+            for (int i = 0; i < 3; i++)
+            {
+                int ci = i < c.Length && int.TryParse(c[i], out var cc) ? cc : 0;
+                int li = i < l.Length && int.TryParse(l[i], out var ll) ? ll : 0;
+                if (li != ci) return li > ci;
+            }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    // ------------------------------------------------------------------ download
+
+    public sealed record DownloadProgress(long Received, long Total);
+
+    /// <summary>Downloads the release exe and records the pending swap. Throws on failure.</summary>
+    public static async Task<PendingUpdate> DownloadAsync(UpdateInfo info, Action<DownloadProgress>? progress = null)
+    {
+        Directory.CreateDirectory(UpdateDir);
+        string target = Path.Combine(UpdateDir, $"FullRGB-{info.Version}.exe");
+
+        using var resp = await Http.GetAsync(info.AssetUrl, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        long total = resp.Content.Headers.ContentLength ?? -1;
+        await using var src = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        await using (var outFs = new FileStream(target + ".part", FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            byte[] buf = new byte[81920];
+            long received = 0;
+            int n;
+            while ((n = await src.ReadAsync(buf).ConfigureAwait(false)) > 0)
+            {
+                await outFs.WriteAsync(buf.AsMemory(0, n)).ConfigureAwait(false);
+                received += n;
+                progress?.Invoke(new DownloadProgress(received, total));
+            }
+        }
+
+        // Verify BEFORE it can ever be swapped in: size floor, MZ header, checksum.
+        var fi = new FileInfo(target + ".part");
+        if (fi.Length < 5 * 1024 * 1024)
+            throw new IOException($"downloaded file too small ({fi.Length} bytes)");
+        using (var fs = fi.OpenRead())
+        {
+            // byte[], not stackalloc: Span/stackalloc inside an async method needs a preview language feature.
+            byte[] two = new byte[2];
+            if (fs.Read(two, 0, 2) != 2 || two[0] != (byte)'M' || two[1] != (byte)'Z')
+                throw new IOException("downloaded file is not a Windows executable");
+        }
+        string sha;
+        using (var fs = fi.OpenRead())
+            sha = Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
+        File.Move(target + ".part", target, true);
+
+        var pending = new PendingUpdate
+        {
+            Version = info.Version,
+            File = target,
+            Sha256 = sha,
+            DownloadedAt = DateTime.UtcNow.ToString("o"),
+        };
+        File.WriteAllText(PendingPath, JsonSerializer.Serialize(pending,
+            new JsonSerializerOptions { WriteIndented = true }));
+        Diag.AppLog.Info($"update {info.Version} downloaded and verified ({fi.Length} bytes)");
+        return pending;
+    }
+
+    // ------------------------------------------------------------------ apply / cleanup
+
+    /// <summary>Is a verified update waiting to be swapped in?</summary>
+    public static PendingUpdate? ReadPending()
+    {
+        try
+        {
+            if (!File.Exists(PendingPath)) return null;
+            var p = JsonSerializer.Deserialize<PendingUpdate>(File.ReadAllText(PendingPath));
+            if (p is null || p.File.Length == 0 || !File.Exists(p.File)) { TryDelete(PendingPath); return null; }
+            return p;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Called EARLY in OnStartup, before the engine or the UI exist. Swaps in a pending update
+    /// (self-replace + relaunch, this instance exits) and prunes leftovers. Returns the args the
+    /// caller should relaunch with, or null when there is nothing to do / no swap was possible.
+    /// </summary>
+    public static string[]? ApplyPendingOnStartup(string[] args)
+    {
+        CleanupStale();
+        var pending = ReadPending();
+        if (pending is null) return null;
+
+        string exe = Environment.ProcessPath ?? "";
+        if (exe.Length == 0 || !File.Exists(exe)) return null;
+        // Already the new version? (same file content) — just clear the flag.
+        try
+        {
+            if (SameFile(exe, pending.File)) { TryDelete(PendingPath); TryDelete(pending.File); return null; }
+        }
+        catch { }
+
+        try
+        {
+            using var fs = File.OpenRead(pending.File);
+            // hash re-check at apply time
+            string sha = Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
+            if (sha != pending.Sha256)
+            {
+                Diag.AppLog.Warn($"pending update checksum mismatch — dropped ({sha} != {pending.Sha256})");
+                TryDelete(PendingPath);
+                TryDelete(pending.File);
+                return null;
+            }
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Warn("pending update unreadable: " + e.Message);
+            return null;
+        }
+
+        try
+        {
+            string old = exe + ".old";
+            TryDelete(old);
+            File.Move(exe, old);                 // legal while this process runs it
+            File.Move(pending.File, exe, true);  // the new bytes take the old path
+            TryDelete(PendingPath);
+            Diag.AppLog.Info($"update {pending.Version} applied — relaunching");
+            return args;
+        }
+        catch (Exception e)
+        {
+            // A locked exe (some AV products hold it) must not brick the app: just log.
+            Diag.AppLog.Warn("update swap failed: " + e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Deletes FullRGB.exe.old next to the current exe (left by the previous swap).</summary>
+    public static void CleanupStale()
+    {
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                string old = exe + ".old";
+                if (File.Exists(old)) TryDelete(old);
+            }
+        }
+        catch { }
+        try
+        {
+            if (Directory.Exists(UpdateDir))
+                foreach (var f in new DirectoryInfo(UpdateDir).GetFiles())
+                    // part files and downloads older than 7 days are junk
+                    if (f.Extension == ".part" || f.LastWriteTimeUtc < DateTime.UtcNow.AddDays(-7))
+                        TryDelete(f.FullName);
+        }
+        catch { }
+    }
+
+    private static bool SameFile(string a, string b)
+    {
+        var fa = new FileInfo(a);
+        var fb = new FileInfo(b);
+        if (fa.Length != fb.Length) return false;
+        using var ha = fa.OpenRead();
+        using var hb = fb.OpenRead();
+        Span<byte> ba = stackalloc byte[8192], bb = stackalloc byte[8192];
+        int na, nb;
+        while ((na = ha.Read(ba)) > 0)
+        {
+            nb = hb.Read(bb);
+            if (na != nb || !ba[..na].SequenceEqual(bb[..nb])) return false;
+        }
+        return hb.Read(bb) == 0;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    /// <summary>Relaunches with the given args (used after a successful swap).</summary>
+    public static void Relaunch(string[] args)
+    {
+        string exe = Environment.ProcessPath ?? "";
+        if (exe.Length == 0) return;
+        var psi = new ProcessStartInfo
+        {
+            FileName = exe,
+            UseShellExecute = false,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        Process.Start(psi);
+    }
+}

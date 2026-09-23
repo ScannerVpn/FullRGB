@@ -199,6 +199,36 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoRecoverLighting { get; set; } = true;
 
+    // ---------- round 21: automation / update / companion / time schedule / HID guard ----------
+
+    /// <summary>Automatic update checks + download from GitHub Releases (applied on next start).</summary>
+    public bool AutoUpdateEnabled { get; set; } = true;
+
+    /// <summary>When the last successful update check ran (24 h cadence, manual checks don't store).</summary>
+    public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
+
+    /// <summary>Master switch for the local control bus: CLI one-shot verbs, the
+    /// "fullrgb-ctrl" named pipe and the loopback HTTP API. Default ON — everything binds
+    /// to this user's session only.</summary>
+    public bool ControlApiEnabled { get; set; } = true;
+
+    /// <summary>TCP port of the local HTTP API + companion page (127.0.0.1 by default).</summary>
+    public int ControlApiPort { get; set; } = 9372;
+
+    /// <summary>When true the same HTTP server also binds to the LAN interface so a phone
+    /// can open the companion page. Token is required for every /api call.</summary>
+    public bool CompanionEnabled { get; set; } = false;
+
+    /// <summary>Time-of-day profile rules (raw editor text; parsed by ScheduleRules).</summary>
+    public string TimeScheduleRules { get; set; } = "";
+
+    /// <summary>Time schedule master switch (rules switch profiles while on).</summary>
+    public bool TimeScheduleEnabled { get; set; } = false;
+
+    /// <summary>Global kill switch for community HID protocol WRITES. Importing a protocol
+    /// stays read-only unless this is on AND the user double-confirms in the Hardware page.</summary>
+    public bool HidExperimentalWrite { get; set; } = false;
+
     public string ActiveProfile { get; set; } = "Default";
     public List<Profile> Profiles { get; set; } = new() { new() };
 
@@ -236,6 +266,8 @@ public sealed class AppSettings
         ForegroundMap ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var k in ForegroundMap.Keys.Where(k => string.IsNullOrWhiteSpace(k)).ToList())
             ForegroundMap.Remove(k);
+        if (ControlApiPort is < 1024 or > 65535 || ControlApiPort == ServerPort) ControlApiPort = 9372;
+        TimeScheduleRules ??= "";
         return this;
     }
 

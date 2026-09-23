@@ -57,6 +57,7 @@ public partial class MainWindow
         new(EffectType.Plasma,      "chip.plasma",    null, PlasmaPath),
         new(EffectType.Ambient,     "chip.ambient",   "\uE7F4"),   // Connected: screen mirror
         new(EffectType.Gaming,      "chip.gaming",    "\uE7FC"),   // Game controller
+        new(EffectType.GamePulse,   "chip.gamepulse", null, GamePulsePath),   // ECG pulse, font-independent
     };
 
     // 24×24 icon geometries (drawn to match MDL2's optical weight)
@@ -82,6 +83,8 @@ public partial class MainWindow
         "M12 2.5 L14.2 9.8 L21.5 12 L14.2 14.2 L12 21.5 L9.8 14.2 L2.5 12 L9.8 9.8 Z";
     private const string PlasmaPath =
         "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M7.5 12 C9.5 8.5 10.5 15.5 12.5 12 C14 9.5 15.5 10.5 16.5 12";
+    private const string GamePulsePath =
+        "M2 12 H8 L10.5 6 L13.5 18 L15.5 12 H22";
 
     /// <summary>Effect types that have a chip in the picker (UI-test hook).</summary>
     internal static IReadOnlyCollection<EffectType> CatalogTypes =>
@@ -620,6 +623,7 @@ public partial class MainWindow
         EffectType.Temperature => false,  // fixed cold -> hot ramp
         EffectType.Custom => false,       // palette comes from CustomPixels
         EffectType.Ambient => true,       // screen drives the colours; primary is the no-screen fallback
+        EffectType.GamePulse => true,     // primary IS the danger colour; secondary is the healthy one
         _ => true,                        // Gaming included: primary paints when no screen sample exists
     };
 
@@ -741,6 +745,26 @@ public partial class MainWindow
             // Screen colour drives the strip; only the hit-flash strength is adjustable
             // (plus the primary colour shown as the no-screen fallback).
             AddSlider(L10n.T("lbl.beat"), _edit.BeatStrength, v => _edit.BeatStrength = v);
+        }
+
+        if (_edit.Type == EffectType.GamePulse)
+        {
+            // Health drives the body; the two colours are danger (primary) and healthy
+            // (secondary), and the style picks solid vs. health-bar rendering.
+            AddRow(L10n.T("lbl.color2"), ColorBox(_edit.Color2Hex, c => _edit.Color2Hex = c));
+            var modes = new[] { "bar", "mirror", "dots" };
+            var modeCmb = Combo(new[] { L10n.T("gp.solid"), L10n.T("gp.bar"), L10n.T("gp.dots") },
+                            Math.Max(0, Array.IndexOf(modes, _edit.AudioMode)),
+                            i => { _edit.AudioMode = modes[Math.Clamp(i, 0, 2)]; PushEdit(); });
+            AddRow(L10n.T("gp.style"), modeCmb);
+            EffectParams.Children.Add(new TextBlock
+            {
+                Text = L10n.T("fx.gamepulseHint"),
+                Style = (Style)FindResource("FaintTxt"),
+                Foreground = (Brush)FindResource("Muted"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10),
+            });
         }
 
         if (_edit.Type == EffectType.Ambient)
@@ -1034,6 +1058,9 @@ public partial class MainWindow
             AudioTreble = _audio?.Treble ?? 0,
             Beat = _audio?.Beat ?? 0,
         };
+        ctx.ScreenValid = _audio is not null && _audio.FillScreenContext(ctx);
+        // the preview must show the same game events the hardware reacts to
+        FullRGB.Sensors.GameEventState.Fill(ctx);
         var rgb = EffectRenderer.Render(_edit, PreviewLeds, 0, ctx, _previewAudio);
         for (int i = 0; i < PreviewLeds; i++)
         {

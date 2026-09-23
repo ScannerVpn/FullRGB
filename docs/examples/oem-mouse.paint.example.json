@@ -1,0 +1,23 @@
+{
+  "_comment": "EXAMPLE — paint protocol (FICTIONAL BYTE LAYOUT, do not import against real hardware without capturing your own traffic). Shows the shape of a working paint section: report id 6, 64-byte report, a 2-byte prefix, and 20 repeated RGB slots. Delete this comment key if you adapt the file — the validator ignores unknown keys.",
+  "schema": "fullrgb.hid/1",
+  "name": "Example OEM mouse (paint)",
+  "author": "FullRGB maintainers (example file — capture your own traffic first)",
+  "vid": "30FA",
+  "pid": "1140",
+  "notes": "Write is triple-gated: the global 'Experimental writes' switch AND a typed double confirmation are required for every single test paint. Start read-only: ship the probe, collect report bytes, and only add a paint section once a report deterministically mirrors the vendor software's colours.",
+  "source": "shape based on common Sino Wealth OEM boards — NOT verified on this PID",
+  "probe": {
+    "usagePage": 65280,
+    "usage": 1,
+    "reportId": 6,
+    "length": 64
+  },
+  "paint": {
+    "reportId": 6,
+    "length": 64,
+    "prefix": "06 01",
+    "order": "RGB",
+    "rgbSlots": 20
+  }
+}

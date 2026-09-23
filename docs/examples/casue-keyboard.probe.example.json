@@ -1,0 +1,16 @@
+{
+  "_comment": "EXAMPLE — read-only community protocol. Names the vendor HID channel this keyboard exposes so FullRGB can probe it safely. No paint section = the app will NEVER write to the device.",
+  "schema": "fullrgb.hid/1",
+  "name": "CASUE USB KB (probe only)",
+  "author": "FullRGB maintainers (example file — verify against YOUR unit)",
+  "vid": "2A7A",
+  "pid": "939F",
+  "notes": "Keyboard exposes a vendor HID collection (usagePage 0xFF01 = 65281, 8-byte feature reports). This file only defines a probe: import it, press Probe (read) and share the bytes you get in the device's Discussion thread.",
+  "source": "discovered with _probe/hid_mouse_probe.py on the dev rig",
+  "probe": {
+    "usagePage": 65281,
+    "usage": 1,
+    "reportId": 1,
+    "length": 8
+  }
+}

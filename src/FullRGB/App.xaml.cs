@@ -1,5 +1,7 @@
+using System.IO;
 using System.Threading;
 using System.Windows;
+using FullRGB.Automation;
 using FullRGB.Config;
 using Application = System.Windows.Application;
 
@@ -8,6 +10,13 @@ namespace FullRGB;
 public partial class App : Application
 {
     public static AppSettings Settings { get; set; } = new();
+
+    /// <summary>
+    /// An automation verb ("set-profile gaming") that arrived on the command line while NO
+    /// instance was running. MainWindow replays it once the engine session is up — a CLI
+    /// command behaves the same whether the app was already running or not.
+    /// </summary>
+    public static string PendingCommandVerb { get; set; } = "";
 
     /// <summary>
     /// Every RGB part this machine has ever shown. Loaded before the splash so the app can name
@@ -187,6 +196,111 @@ public partial class App : Application
             return;
         }
 
+        // --export-diagnostics[=path]: build the one-click bug-report zip without the GUI.
+        // Same code the Hardware page button calls (Diag.DiagnosticsExport), so support
+        // tickets can be produced headlessly from CI or a support script.
+        var diagArg = e.Args.FirstOrDefault(a => a.StartsWith("--export-diagnostics", StringComparison.OrdinalIgnoreCase));
+        if (diagArg is not null)
+        {
+            _headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            int code = 0;
+            try
+            {
+                string path = diagArg.Contains('=')
+                    ? diagArg.Split('=', 2)[1]
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                                   $"FullRGB-diagnostics-{DateTime.Now:yyyyMMdd-HHmm}.zip");
+                var built = Diag.DiagnosticsExport.Build(path, () => Diag.DiagnosticsExport.SupportMatrixText());
+                Console.WriteLine(built);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("ERR " + ex.Message);
+                code = 1;
+            }
+            Shutdown(code);
+            return;
+        }
+
+        // --help / --version: scriptable usage text.
+        if (e.Args.Any(a => a is "--help" or "-h" or "/?"))
+        {
+            PrintOut(CliHelpText());
+            Shutdown(0);
+            return;
+        }
+        if (e.Args.Any(a => a is "--version" or "-v"))
+        {
+            PrintOut("FullRGB " + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?"));
+            Shutdown(0);
+            return;
+        }
+
+        // Automation verbs: --set-profile gaming and friends. A running instance gets the
+        // command over the named pipe and this process exits; with no instance running, the
+        // command is parked and applied right after this launch's engine session comes up
+        // (the read-only info verbs answer from the settings file instead).
+        if (TryBuildAutomationCommand(e.Args, out string cmd, out string cmdErr))
+        {
+            _headless = true;   // never touch the UI below even if we continue into startup
+            var (ok, reply) = ControlHub.SendOneShot(cmd).GetAwaiter().GetResult();
+            if (ok)
+            {
+                if (Console.IsOutputRedirected)
+                    Console.WriteLine(reply);                    // scripts always get the payload
+                else if (reply.StartsWith("ERR", StringComparison.Ordinal)
+                         || cmd is "status" or "profiles" or "version")
+                    PrintOut(reply);                             // double-click users see it
+                // an OK action verb stays silent when there is no console: the LEDs are the answer
+                Shutdown(0);
+                return;
+            }
+            if (reply.StartsWith("ERR", StringComparison.Ordinal))
+            {
+                // An instance IS running but the command failed — report and stop.
+                if (Console.IsOutputRedirected) Console.WriteLine(reply);
+                else PrintOut(reply);
+                Shutdown(1);
+                return;
+            }
+            // No running instance: answer info verbs offline, park action verbs for startup.
+            if (cmd is "status" or "profiles")
+            {
+                PrintOut(cmd == "status"
+                    ? "{\"ok\":false,\"app\":\"FullRGB\",\"engine\":\"offline\"}"
+                    : string.Join("\n", ProfileStore.Load().Profiles.Select(p => p.Name)));
+                Shutdown(0);
+                return;
+            }
+            PendingCommandVerb = cmd;
+            _headless = false;   // continue into the normal startup below
+        }
+        else if (cmdErr.Length > 0)
+        {
+            PrintOut("ERR " + cmdErr);
+            if (!Console.IsOutputRedirected)
+                System.Windows.MessageBox.Show(cmdErr, "FullRGB", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Shutdown(2);
+            return;
+        }
+
+        // Update housekeeping BEFORE the single-instance check: a pending update is swapped in
+        // here (rename current exe -> .old, move the downloaded exe into place, relaunch) so the
+        // user never has to reinstall by hand. Must happen before any engine/UI work.
+        try
+        {
+            Update.AppUpdater.CleanupStale();
+            var applied = Update.AppUpdater.ApplyPendingOnStartup(e.Args);
+            if (applied is not null)
+            {
+                Update.AppUpdater.Relaunch(applied);
+                Shutdown(0);
+                return;
+            }
+        }
+        catch { /* a failed swap must never block the app from starting */ }
+
         // Only one FullRGB may drive the hardware at a time: two engines fight over the SDK port
         // and each one's zone resizes/mode switches undo the other's.
         // Local\ (not Global\): standard users cannot create a Global mutex (UnauthorizedAccessException).
@@ -265,5 +379,115 @@ public partial class App : Application
         try { _singleInstance?.ReleaseMutex(); } catch { }
         _singleInstance?.Dispose();
         base.OnExit(e);
+    }
+
+    // ---------- round 21: CLI helpers ----------
+
+    /// <summary>Console output when redirected, a dialog when the user just double-clicked.</summary>
+    private static void PrintOut(string text)
+    {
+        if (Console.IsOutputRedirected)
+        {
+            Console.WriteLine(text);
+            return;
+        }
+        // A GUI-subsystem exe has no console of its own; surface the text in a themed box so
+        // "--help by double-click" is not a silent no-op.
+        try { System.Windows.MessageBox.Show(text, "FullRGB", MessageBoxButton.OK, MessageBoxImage.Information); }
+        catch { }
+    }
+
+    internal static string CliHelpText() =>
+        "FullRGB " + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?") +
+        " — usage:\n\n" +
+        "  FullRGB.exe                          start the app\n" +
+        "  FullRGB.exe --help                   this text\n" +
+        "  FullRGB.exe --version                print the app version\n\n" +
+        "Automation (a running instance is driven over the local pipe; without one,\n" +
+        "the command is applied at startup):\n" +
+        "  --status                             one-line JSON session summary\n" +
+        "  --list-profiles                      print profile names\n" +
+        "  --set-profile <name>                 switch profile\n" +
+        "  --set-effect <name>                  set the global effect (solid, rainbow, gamepulse, ...)\n" +
+        "  --set-color <#RRGGBB> [--secondary]  set the effect colour\n" +
+        "  --set-brightness <0..1>              set brightness (0..100 also accepted)\n" +
+        "  --set-speed <0..1>                   set speed\n" +
+        "  --power <on|off>                     start/stop effects\n" +
+        "  --blackout                           paint every LED black once\n" +
+        "  --game-event <name> [value]          feed the GamePulse effect (hp, hit, death, ...)\n" +
+        "  --rescan                             re-detect devices\n\n" +
+        "Named pipe: \\\\.\\pipe\\" + ControlHub.PipeName + "  (one line per command)\n" +
+        "HTTP API:   http://127.0.0.1:" + SettingsOrDefault().ControlApiPort + "/  (token required; see docs/automation.md)\n" +
+        "Mobile:     Settings -> Mobile companion (same port, PIN + token)\n\n" +
+        "Diagnostics:\n" +
+        "  --export-diagnostics[=path.zip]      build the bug-report zip headlessly\n\n" +
+        CommandDispatcher.HelpText;
+
+    private static AppSettings SettingsOrDefault()
+    {
+        try { return ProfileStore.Load(); } catch { return new AppSettings(); }
+    }
+
+    /// <summary>
+    /// Maps the friendly CLI flags onto the shared dispatcher command set. Returns false when
+    /// no automation flag is present; cmdErr is non-empty for a malformed one.
+    /// </summary>
+    private static bool TryBuildAutomationCommand(string[] args, out string command, out string error)
+    {
+        command = "";
+        error = "";
+
+        string err = "";
+
+        string? Take(string flag, bool withValue = true)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (!args[i].Equals(flag, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!withValue) return "";
+                if (i + 1 >= args.Length) { err = $"missing value for {flag}"; return null; }
+                return args[i + 1];
+            }
+            return null;
+        }
+
+        // one value-bearing flag per invocation (the dispatcher handles one command)
+        var flags = new[]
+        {
+            "--set-profile", "--profile", "--set-effect", "--set-color", "--set-brightness",
+            "--set-speed", "--power", "--game-event", "--status", "--list-profiles", "--rescan",
+            "--blackout",
+        };
+        int found = args.Count(a => flags.Any(f => a.Equals(f, StringComparison.OrdinalIgnoreCase)));
+        if (found == 0) return false;
+        if (found > 1) { error = "give exactly ONE automation flag per invocation"; return false; }
+
+        string? v;
+        if ((v = Take("--set-profile")) is not null || (v = Take("--profile")) is not null)
+        { error = err; if (error.Length > 0) return false; command = "set-profile " + v; return true; }
+        if ((v = Take("--set-effect")) is not null)
+        { command = "set-effect " + v; return true; }
+        if ((v = Take("--set-color")) is not null)
+        {
+            bool secondary = args.Any(a => a.Equals("--secondary", StringComparison.OrdinalIgnoreCase));
+            command = (secondary ? "set-color2 " : "set-color ") + v;
+            return true;
+        }
+        if ((v = Take("--set-brightness")) is not null) { command = "set-brightness " + v; return true; }
+        if ((v = Take("--set-speed")) is not null) { command = "set-speed " + v; return true; }
+        if ((v = Take("--power")) is not null) { command = "power " + v.ToLowerInvariant(); return true; }
+        if ((v = Take("--game-event")) is not null)
+        {
+            // value may itself be "name value" (two args were consumed by --game-event)
+            string extra = Take("--game-event") is not null && args.Length > Array.IndexOf(args, "--game-event") + 2
+                ? args[Array.IndexOf(args, "--game-event") + 2] : "";
+            command = "game-event " + v + (extra.Length > 0 ? " " + extra : "");
+            return true;
+        }
+        if (args.Any(a => a.Equals("--status", StringComparison.OrdinalIgnoreCase))) { command = "status"; return true; }
+        if (args.Any(a => a.Equals("--list-profiles", StringComparison.OrdinalIgnoreCase))) { command = "profiles"; return true; }
+        if (args.Any(a => a.Equals("--rescan", StringComparison.OrdinalIgnoreCase))) { command = "rescan"; return true; }
+        if (args.Any(a => a.Equals("--blackout", StringComparison.OrdinalIgnoreCase))) { command = "blackout"; return true; }
+        return false;
     }
 }

@@ -76,6 +76,9 @@ public partial class MainWindow : Window
                 HookPowerEvents();
                 try { InitTray(); } catch { /* no tray icon is survivable; the session continues */ }
                 try { StartAutomation(); } catch { /* rotation/foreground watchers are optional */ }
+                try { StartTimeSchedule(); } catch { /* time-of-day rules are optional */ }
+                try { StartHub(); } catch { /* the control bus is optional */ }
+                try { StartUpdater(); } catch { /* update checks are optional */ }
                 try { StartLightingWatchdog(); } catch { /* the frame watchdog is best-effort */ }
                 if (_client is { Connected: true }) OnConnected();
                 else await ConnectAsync();
@@ -279,6 +282,7 @@ public partial class MainWindow : Window
         _rebuildsWithoutGrowth = 0;
         _statusIsRecovering = true;
         SetStatus(L10n.T("status.recover", L10n.T("status.recoverEngine")), StatusKind.Warn);
+        NoteEngineReplaced();
         BeginResumeRecovery();
     }
 
@@ -305,6 +309,7 @@ public partial class MainWindow : Window
             engine.InvalidateFrames();
             if (engine.IsRunning) engine.Apply(profile);
             _sessionStartedUtc = DateTime.UtcNow;
+            OnSessionHealthy();
             RefreshStatus();
             SyncRunButtons();
         }
@@ -531,6 +536,7 @@ public partial class MainWindow : Window
         }
         RefreshStatus();
         SyncRunButtons();
+        OnSessionHealthy();
         SetStatus(L10n.T("status.resumed"), StatusKind.Ok);
         return true;
     }
@@ -553,6 +559,10 @@ public partial class MainWindow : Window
         _sessionStartedUtc = DateTime.UtcNow;
         _rebuildsWithoutGrowth = 0;
         _statusIsRecovering = false;
+        // The engine just proved itself: any pending safe-mode state can go away, and a CLI
+        // one-shot that arrived while nothing was running is applied now.
+        OnSessionHealthy();
+        ApplyPendingCommand();
         _edit = EffectEngine.Clone(profile.GlobalEffect);
         BuildDeviceList();
         BuildDevicePicker();
@@ -881,7 +891,7 @@ public partial class MainWindow : Window
         if (ConnManageBtn is not null) ConnManageBtn.Content = L10n.T("connected.manage") + "  ›";
         if (FxHintTxt is not null) FxHintTxt.Text = L10n.T("effects.hint");
         if (FxFooterTxt is not null) FxFooterTxt.Text = L10n.T("effects.footer");
-        if (FxCountTxt is not null) FxCountTxt.Text = L10n.T("effects.count", 18);
+        if (FxCountTxt is not null) FxCountTxt.Text = L10n.T("effects.count", FxCatalog.Length);
         if (SaveProfileBtn2 is not null) SaveProfileBtn2.Content = L10n.T("btn.saveToDevices");
         if (DevRescanBtn is not null) DevRescanBtn.Content = L10n.T("btn.rescan");
         if (DevRescanHint is not null) DevRescanHint.Text = L10n.T("dev.rescanHint");
@@ -919,6 +929,26 @@ public partial class MainWindow : Window
         BackupHdr.Text = L10n.T("backup.title");
         ExportBtn.Content = L10n.T("backup.export");
         ImportBtn.Content = L10n.T("backup.import");
+        ProfileExportBtn.Content = L10n.T("ps.export");
+        ProfileImportBtn.Content = L10n.T("ps.import");
+        ProfileCodeBtn.Content = L10n.T("ps.code");
+        ProfileExportBtn.ToolTip = L10n.T("ps.exportTip");
+        ProfileImportBtn.ToolTip = L10n.T("ps.importTip");
+        ProfileCodeBtn.ToolTip = L10n.T("ps.codeTip");
+        TimeSchedHdr.Text = L10n.T("ts.title");
+        TimeSchedChk.Content = L10n.T("ts.enable");
+        TimeSchedHint.Text = L10n.T("ts.hint");
+        FgAddCurrentBtn.Content = L10n.T("fg.addCurrent");
+        CompanionHdr.Text = L10n.T("companion.title");
+        CompanionChk.Content = L10n.T("companion.enable");
+        CompanionHint.Text = L10n.T("companion.hint");
+        CompanionOpenBtn.Content = L10n.T("companion.open");
+        CompanionCopyBtn.Content = L10n.T("companion.copy");
+        UpdateHdr.Text = L10n.T("update.title");
+        UpdateChk.Content = L10n.T("update.enable");
+        UpdateCheckBtn.Content = L10n.T("update.check");
+        SafeModeTxt.Text = L10n.T("safemode.text", _safeMode.SecondsUntilRetry);
+        SafeModeRetryBtn.Content = L10n.T("safemode.restore");
         AboutHdr.Text = L10n.T("about.title");
         AboutTxt.Text = L10n.T("about.body");
         // The hardware page owns AdvancedHdr / Why*Txt now; BuildHardwarePage fills them when the
@@ -1231,6 +1261,10 @@ public partial class MainWindow : Window
         try { _lightingWatchdog?.Dispose(); } catch { }
         try { StopPreview(); } catch { }
         StopAutomation();
+        try { _safeModeTimer?.Stop(); } catch { }
+        try { _timeSchedTimer?.Stop(); } catch { }
+        try { _updateTimer?.Stop(); } catch { }
+        StopHub();
         try { _engineWatchdog?.Stop(); } catch { }
         try
         {

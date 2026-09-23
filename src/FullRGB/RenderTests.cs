@@ -815,11 +815,11 @@ public static class RenderTests
         try
         {
             Config.DeviceCache.SaveTo(cachePath, partial);
-            var back = Config.DeviceCache.LoadFrom(cachePath);
+            var cacheBack = Config.DeviceCache.LoadFrom(cachePath);
             Check("cache: round-trips through JSON",
-                  back is not null && back.Devices.Count == partial.Devices.Count);
+                  cacheBack is not null && cacheBack.Devices.Count == partial.Devices.Count);
             Check("cache: zones survive the round trip",
-                  back is not null && back.Devices.Single(d => d.Key == "Commander Core@usb-1").Zones.Count == 1);
+                  cacheBack is not null && cacheBack.Devices.Single(d => d.Key == "Commander Core@usb-1").Zones.Count == 1);
             Check("cache: a missing file is a miss, not a crash",
                   Config.DeviceCache.LoadFrom(cachePath + ".nope") is null);
             File.WriteAllText(cachePath, "{ not json at all");
@@ -977,7 +977,197 @@ public static class RenderTests
         Check("tcp: a listener with no clients has zero clients",
               Setup.EngineShadow.ParseRows(onlyListener, 6742) is { Listening: true, Clients: 0 });
 
+        // ---- 46. round 21: time-of-day schedule rules ----
+        var (tsRules, tsErrors) = Config.ScheduleRules.Parse(
+            "# comment line\n22:00-07:00=Night\nMo-Fr 08:00-17:00=Work\nbad line\n=Broken\nNight 25:99-07:00=X");
+        Check("schedule: two valid rules parsed", tsRules.Count == 2,
+              $"rules={tsRules.Count} errors={tsErrors.Count}");
+        Check("schedule: broken lines are reported", tsErrors.Count >= 3, $"errors={tsErrors.Count}");
+        var night = tsRules.FirstOrDefault(r => r.Profile == "Night");
+        Check("schedule: overnight range detected", night is { IsOvernight: true });
+        Check("schedule: 23:30 matches the overnight rule",
+              night is not null && night.Matches(new DateTime(2026, 9, 23, 23, 30, 0)));
+        Check("schedule: 03:00 matches the overnight rule (past midnight)",
+              night is not null && night.Matches(new DateTime(2026, 9, 23, 3, 0, 0)));
+        Check("schedule: 12:00 does not match the overnight rule",
+              night is not null && !night.Matches(new DateTime(2026, 9, 23, 12, 0, 0)));
+        var work = tsRules.FirstOrDefault(r => r.Profile == "Work");
+        Check("schedule: weekday rule matches a Wednesday 09:00",
+              work is not null && work.Matches(new DateTime(2026, 9, 23, 9, 0, 0)));   // Wed
+        Check("schedule: weekday rule does not match a Saturday 09:00",
+              work is not null && !work.Matches(new DateTime(2026, 9, 26, 9, 0, 0)));  // Sat
+        Check("schedule: evaluate returns the first matching rule",
+              Config.ScheduleRules.Evaluate(tsRules, new DateTime(2026, 9, 23, 23, 30, 0)) == "Night");
+        Check("schedule: no match evaluates to null",
+              Config.ScheduleRules.Evaluate(tsRules, new DateTime(2026, 9, 26, 19, 0, 0)) is null);
+
+        // ---- 47. round 21: profile share (file + short code) ----
+        var shared = new Config.Profile
+        {
+            Name = "SharedTest",
+            GlobalEffect = new Effects.EffectDef
+            {
+                Type = Effects.EffectType.Wave, ColorHex = "#FF0044", Color2Hex = "#00FF88", Speed = 0.7,
+            },
+        };
+        string json = Config.ProfileShare.ExportJson(shared);
+        var back = Config.ProfileShare.ImportJson(json, out var jsonErr);
+        Check("profile share: json round-trips the effect",
+              back is not null && jsonErr.Length == 0
+              && back.GlobalEffect.Type == Effects.EffectType.Wave
+              && back.GlobalEffect.ColorHex == "#FF0044",
+              jsonErr);
+        string code = Config.ProfileShare.ExportCode(shared);
+        var back2 = Config.ProfileShare.ImportCode(code, out var codeErr);
+        Check("profile share: short code round-trips",
+              back2 is not null && codeErr.Length == 0
+              && back2.GlobalEffect.Speed > 0.69 && back2.GlobalEffect.Speed < 0.71
+              && back2.GlobalEffect.Type == Effects.EffectType.Wave,
+              codeErr);
+        Check("profile share: short code has the prefix", code.StartsWith(Config.ProfileShare.Prefix, StringComparison.Ordinal));
+        Check("profile share: a settings file is NOT accepted as a profile",
+              Config.ProfileShare.ImportJson("{\"profiles\":[]}", out _) is null);
+        Check("profile share: garbage is rejected with an error",
+              Config.ProfileShare.ImportCode("FRGB1-not!valid!base64!!", out var badErr) is null && badErr.Length > 0);
+        Check("profile share: dedupe names stay unique",
+              Config.ProfileShare.DedupeName(new[] { "Gaming" }, "Gaming") == "Gaming (2)");
+
+        // ---- 48. round 21: game event state (the GamePulse inputs) ----
+        Sensors.GameEventState.Reset();
+        Sensors.GameEventState.Push("hp", 42);          // 0..100 form is normalised
+        Check("game events: hp above 1 is treated as a percentage", Sensors.GameEventState.HasHealth
+              && Math.Abs(Sensors.GameEventState.Health - 0.42) < 0.001);
+        Sensors.GameEventState.Push("hit", 0.8);
+        Check("game events: a fresh hit has a strong flash",
+              Sensors.GameEventState.FlashNow(Environment.TickCount64) > 0.5);
+        Check("game events: the flash decays to zero in half a second",
+              Sensors.GameEventState.FlashNow(Environment.TickCount64 + 600) == 0);
+        Sensors.GameEventState.Reset();
+        Sensors.GameEventState.Push("death");
+        Check("game events: death sets the hold window",
+              Sensors.GameEventState.DeathHoldNow(Environment.TickCount64));
+        var gameCtx = new Effects.EffectContext { Time = 1.0 };
+        Sensors.GameEventState.Fill(gameCtx);
+        Check("game events: fill copies health + hold into the render context",
+              gameCtx.GameHasHealth == false && gameCtx.GameDeathHold);
+
+        // ---- 48b. round 21: the GamePulse effect renders in every state without throwing ----
+        Sensors.GameEventState.Reset();               // true idle: no events at all
+        var gp = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.GamePulse, ColorHex = "#FF2222", Color2Hex = "#22FF66",
+            Brightness = 0.9,
+        };
+        var gpIdle = Effects.EffectRenderer.Render(gp, 30, 0, gameCtx);
+        Check("gamepulse: idle frame is healthy-coloured and non-black",
+              gpIdle.Length == 90 && gpIdle.Where((_, i) => i % 3 == 1).Any(v => v > 0));
+        var gpHit = new Effects.EffectContext
+        {
+            Time = 1.0, GameHasHealth = true, GameHealth = 0.15, GameHitFlash = 1.0,
+        };
+        var gpFlash = Effects.EffectRenderer.Render(gp, 30, 0, gpHit);
+        Check("gamepulse: a full hit flash saturates toward white",
+              gpFlash[0] > 200 && gpFlash[1] > 200);
+        var gpDeath = new Effects.EffectContext
+        {
+            Time = 1.0, GameHasHealth = true, GameHealth = 0.0, GameDeathHold = true,
+        };
+        var gpRed = Effects.EffectRenderer.Render(gp, 30, 0, gpDeath);
+        Check("gamepulse: death hold is dominated by red",
+              gpRed[0] > gpRed[1] + 40 && gpRed[0] > gpRed[2] + 40);
+        var gpBar = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.GamePulse, AudioMode = "mirror",
+            ColorHex = "#FF2222", Color2Hex = "#22FF66", Brightness = 0.9,
+        };
+        var gpBarFrame = Effects.EffectRenderer.Render(gpBar, 30, 0,
+            new Effects.EffectContext { Time = 1.0, GameHasHealth = true, GameHealth = 0.5 });
+        Check("gamepulse: the health bar style renders",
+              gpBarFrame.Length == 90 && gpBarFrame.Any(v => v > 0));
+
+        // ---- 49. round 21: the command dispatcher (CLI / pipe / HTTP share it) ----
+        var testTarget = new TestControlTarget();
+        Check("dispatcher: set-profile with an unknown name errors",
+              Automation.CommandDispatcher.Execute(testTarget, "set-profile nope").StartsWith("ERR", StringComparison.Ordinal));
+        Check("dispatcher: set-profile with a known name is OK",
+              Automation.CommandDispatcher.Execute(testTarget, "set-profile gaming") == "OK");
+        Check("dispatcher: case-insensitive commands",
+              Automation.CommandDispatcher.Execute(testTarget, "SET-PROFILE Gaming") == "OK");
+        Check("dispatcher: brightness accepts percentages",
+              Automation.CommandDispatcher.Execute(testTarget, "set-brightness 42") == "OK"
+              && Math.Abs(testTarget.LastBrightness - 0.42) < 0.001);
+        Check("dispatcher: brightness accepts 0..1",
+              Automation.CommandDispatcher.Execute(testTarget, "set-brightness 0.85") == "OK"
+              && Math.Abs(testTarget.LastBrightness - 0.85) < 0.001);
+        Check("dispatcher: game-event forwards name and value",
+              Automation.CommandDispatcher.Execute(testTarget, "game-event hp 0.5") == "OK"
+              && testTarget.LastEvent == "hp");
+        Check("dispatcher: unknown commands say so",
+              Automation.CommandDispatcher.Execute(testTarget, "explode now").StartsWith("ERR", StringComparison.Ordinal));
+        Check("dispatcher: status returns JSON",
+              Automation.CommandDispatcher.Execute(testTarget, "status").Contains("\"ok\":true", StringComparison.Ordinal));
+        Check("dispatcher: power off reaches the target",
+              Automation.CommandDispatcher.Execute(testTarget, "power OFF") == "OK" && !testTarget.LastPower);
+        Check("dispatcher: one command is split from its argument",
+              Automation.CommandDispatcher.Split("  set-profile  My Game Rig ") == ("set-profile", "My Game Rig"));
+
+        // ---- 50. round 21: community HID protocol validation (the safety gate is code, not docs) ----
+        const string validProto = """
+            {"schema":"fullrgb.hid/1","name":"CASUE KB","author":"tester","vid":"2A7A","pid":"939F",
+             "probe":{"usagePage":65281,"usage":1,"reportId":1,"length":8},
+             "paint":{"reportId":6,"length":64,"prefix":"06 01","order":"RGB","rgbSlots":20}}
+            """;
+        var protoOk = Hid.HidProtocolFile.Parse(validProto, "casue.json", out var protoErr);
+        Check("hid protocol: a valid definition parses",
+              protoOk is not null && protoErr.Length == 0 && protoOk.VidPid == "2A7A:939F", protoErr);
+        Check("hid protocol: write requires both the file AND the user switch",
+              protoOk is { CanWrite: false });   // HidExperimentalWrite defaults to false
+        const string badSchema = """{"schema":"fullrgb.hid/9","name":"X","vid":"2A7A","pid":"939F","probe":{"length":8}}""";
+        Check("hid protocol: a foreign schema is rejected",
+              Hid.HidProtocolFile.Parse(badSchema, "x.json", out _) is null);
+        const string badVid = """{"schema":"fullrgb.hid/1","name":"X","vid":"ZZZZ","pid":"939F","probe":{"length":8}}""";
+        Check("hid protocol: a non-hex VID is rejected",
+              Hid.HidProtocolFile.Parse(badVid, "x.json", out _) is null);
+        const string oversized = """
+            {"schema":"fullrgb.hid/1","name":"X","vid":"2A7A","pid":"939F",
+             "paint":{"reportId":6,"length":128,"prefix":"","order":"RGB","rgbSlots":40}}
+            """;
+        Check("hid protocol: an oversized report is rejected",
+              Hid.HidProtocolFile.Parse(oversized, "x.json", out _) is null);
+        const string noContent = """{"schema":"fullrgb.hid/1","name":"X","vid":"2A7A","pid":"939F"}""";
+        Check("hid protocol: a definition with no sections is rejected",
+              Hid.HidProtocolFile.Parse(noContent, "x.json", out _) is null);
+
+        // ---- 51. round 21: updater version comparison ----
+        Check("update: a higher minor is newer", Update.AppUpdater.IsNewer("1.6.0", "1.7.0"));
+        Check("update: a higher major is newer", Update.AppUpdater.IsNewer("1.6.0", "2.0.0"));
+        Check("update: the same version is not an update", !Update.AppUpdater.IsNewer("1.6.0", "1.6.0"));
+        Check("update: an older version is not an update", !Update.AppUpdater.IsNewer("1.6.0", "1.5.9"));
+        Check("update: rc suffixes do not crash the compare", !Update.AppUpdater.IsNewer("1.6.0", "1.6.0rc1"));
+
         Console.WriteLine(failed == 0 ? "\nALL RENDER TESTS PASSED" : $"\n{failed} TEST(S) FAILED");
         return failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>Records what the dispatcher called, without touching any real state.</summary>
+    private sealed class TestControlTarget : Automation.IControlTarget
+    {
+        public double LastBrightness;
+        public string LastEvent = "";
+        public bool LastPower = true;
+
+        public string StatusJson() => "{\"ok\":true,\"profile\":\"Test\",\"power\":true}";
+        public List<string> ProfileNames() => new() { "gaming", "work" };
+        public bool SetProfile(string name) => name.Equals("gaming", StringComparison.OrdinalIgnoreCase);
+        public bool SetEffect(string name) => true;
+        public bool SetColor(string hex, bool secondary = false) => true;
+        public bool SetBrightness(double v) { LastBrightness = v; return true; }
+        public bool SetSpeed(double v) => true;
+        public bool Power(bool on) { LastPower = on; return true; }
+        public bool Blackout() => true;
+        public void PushGameEvent(string name, double value) => LastEvent = name;
+        public bool Rescan() => true;
+        public string CompanionPin => "123456";
+        public string ApiToken => "test-token";
     }
 }

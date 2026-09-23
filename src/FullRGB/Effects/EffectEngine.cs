@@ -352,6 +352,8 @@ public sealed class EffectEngine : IDisposable
                         Beat = _audio?.Beat ?? 0,
                     };
                     ctx.ScreenValid = _audio is not null && _audio.FillScreenContext(ctx);
+                    // Game events (hit/hp/death pushed over HTTP/pipe/CLI) — lock-free snapshot
+                    GameEventState.Fill(ctx);
 
                     (renderMs, ioMs) = RenderDevice(dev, profile, ctx, channel, audioState);
                     failures = 0;

@@ -21,6 +21,8 @@ public enum EffectType
     // round 14 additions: APPEND-only
     Ambient = 16,     // every zone samples a DIFFERENT screen colour (per-zone ambient)
     Gaming = 17,      // screen-average body + white kick-flash on audio hits
+    // round 21: game-event driven (fed by the HTTP/pipe/CLI event API)
+    GamePulse = 18,   // health-bar body (healthy→danger) + white hit-flash + red death hold
 }
 
 /// <summary>Serializable effect definition (stored in profiles).</summary>
@@ -124,6 +126,15 @@ public sealed class EffectContext
     public double ScreenRow1R, ScreenRow1G, ScreenRow1B;
     public double ScreenRow2R, ScreenRow2G, ScreenRow2B;
     public bool ScreenValid;
+
+    // Game events (fed from GameEventState; see Sensors/GameEventState.cs). The headless
+    // paths and the hero preview leave these at their defaults, which render a calm
+    // "healthy" strip, so tests and screenshots never flash red.
+    public bool GameHasHealth;      // false until the first hp event arrives
+    public double GameHealth = 1;   // 0..1 (1 = healthy / unknown)
+    public double GameHitFlash;     // 0..1 decaying envelope of the last hit
+    public bool GameDeathHold;      // true for ~1.5 s after a death event
+    public string GameLastEvent = "";
 }
 
 /// <summary>Stateful music meter state (peak-hold). One per render loop; the renderer is pure otherwise.</summary>
@@ -601,6 +612,95 @@ public static class EffectRenderer
                     : ParseHex(e.ColorHex, e.Brightness);
                 Fill(rgb, r0, g0, b0);
                 BeatFlash(e, ctx, rgb);
+                break;
+            }
+            case EffectType.GamePulse:
+            {
+                // Reacts to the game-event API instead of the screen: a low health value
+                // sinks the body colour from the healthy colour (secondary) toward the
+                // danger colour (primary), a hit flashes white over it, a death holds a
+                // slow red pulse for ~1.5 s. With no events yet the strip idles on the
+                // healthy colour with a gentle breathing — alive, but calm.
+                var danger = ParseHex(e.ColorHex, e.Brightness);
+                var healthy = ParseHex(e.Color2Hex, e.Brightness);
+                var bg = ParseBg(e);
+
+                (byte r, byte g, byte b) body;
+                double idle = 0.82 + 0.18 * Math.Sin(2 * Math.PI * t * 0.5);
+                if (ctx.GameDeathHold)
+                {
+                    // death: slow hard pulse between deep red and near-black
+                    double p = 0.35 + 0.65 * Math.Abs(Math.Sin(2 * Math.PI * ctx.Time * 1.2));
+                    body = (Scale(danger.r, p), Scale(danger.g, p * 0.15), Scale(danger.b, p * 0.15));
+                }
+                else
+                {
+                    double health = ctx.GameHasHealth ? Math.Clamp(ctx.GameHealth, 0, 1) : 1;
+                    // 1.0 → healthy colour, 0.0 → danger colour, with a pulse that quickens
+                    // as health drops (the strip itself starts to "beat like a heart")
+                    var (br, bgc, bb) = (Lerp(healthy.r, danger.r, 1 - health),
+                                         Lerp(healthy.g, danger.g, 1 - health),
+                                         Lerp(healthy.b, danger.b, 1 - health));
+                    double beat = 0.78 + 0.22 * Math.Sin(2 * Math.PI * ctx.Time * (0.6 + (1 - health) * 2.4));
+                    body = (Scale(br, beat * idle), Scale(bgc, beat * idle), Scale(bb, beat * idle));
+                }
+
+                if (e.AudioMode == "bar")
+                {
+                    // default style: solid body over the whole zone
+                    Fill(rgb, body.r, body.g, body.b);
+                }
+                else
+                {
+                    // "mirror" = a health BAR growing from the edges toward the center;
+                    // "dots" = dotted bar. The bar length IS the health value; danger colour
+                    // at the low end. Without a health value the bar is full.
+                    double h = ctx.GameHasHealth ? Math.Clamp(ctx.GameHealth, 0, 1) : 1;
+                    bool dots = e.AudioMode == "dots";
+                    var grad = new[] { danger, healthy };
+                    if (e.AudioMode == "mirror")
+                    {
+                        int half = ledCount / 2;
+                        int litHalf = (int)Math.Round(h * half);
+                        for (int i = 0; i < ledCount; i++)
+                        {
+                            int d = i < half ? half - 1 - i : i - (ledCount - half);
+                            if (d < litHalf)
+                            {
+                                double k = half <= 1 ? 0 : (double)(half - 1 - Math.Min(d, half - 1)) / (half - 1);
+                                var (r, g, b) = Sample(grad, k);
+                                Set(rgb, i, r, g, b);
+                            }
+                            else Set(rgb, i, bg.r, bg.g, bg.b);
+                        }
+                    }
+                    else
+                    {
+                        int lit = (int)Math.Round(h * ledCount);
+                        for (int i = 0; i < ledCount; i++)
+                        {
+                            int pos = dir < 0 ? ledCount - 1 - i : i;
+                            if (pos < lit && (!dots || pos % 3 == 0))
+                            {
+                                double k = lit <= 1 ? 0 : (double)pos / Math.Max(1, lit - 1);
+                                var (r, g, b) = Sample(grad, k);
+                                Set(rgb, i, r, g, b);
+                            }
+                            else Set(rgb, i, bg.r, bg.g, bg.b);
+                        }
+                    }
+                }
+
+                // hit flash: additive white, envelope decays in GameEventState (already scaled)
+                if (ctx.GameHitFlash > 0.01)
+                {
+                    byte add = (byte)Math.Round(255 * Math.Clamp(ctx.GameHitFlash, 0, 1));
+                    for (int i = 0; i < rgb.Length; i++)
+                    {
+                        int v = rgb[i] + add;
+                        rgb[i] = (byte)(v > 255 ? 255 : v);
+                    }
+                }
                 break;
             }
         }

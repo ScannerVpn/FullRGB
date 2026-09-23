@@ -314,6 +314,105 @@ public static class L10n
             ["scan.cached"] = "{0} device(s) remembered from the last run",
             ["scan.cachedMatch"] = "Remembered inventory matched ({0} devices) — skipped the full scan",
             ["scan.cachedMissing"] = "Not detected this time: {0} — their settings are kept",
+
+            // ---------- round 21: game pulse ----------
+            ["chip.gamepulse"] = "GamePulse",
+            ["gp.style"] = "Style",
+            ["gp.solid"] = "Solid body",
+            ["gp.bar"] = "Health bar",
+            ["gp.dots"] = "Dotted bar",
+            ["fx.gamepulseHint"] = "Reacts to game events sent to the local API (hp, hit, death): the body sinks from the healthy colour toward the danger colour as health drops, hits flash white, deaths pulse red. Send events with FullRGB.exe --game-event hp 0.5 or POST /api/event.",
+
+            // ---------- round 21: time schedule ----------
+            ["ts.title"] = "Time schedule",
+            ["ts.enable"] = "Switch profiles by time of day",
+            ["ts.hint"] = "One rule per line: HH:MM-HH:MM=Profile. Optional days (Mo-Fr or Sa,Su) in front. First matching rule wins; ranges may wrap midnight. Example:\n22:00-07:00=Night\nMo-Fr 08:00-18:00=Work",
+
+            // ---------- round 21: per-app profiles ----------
+            ["fg.addCurrent"] = "Add current app → active profile",
+            ["fg.added"] = "Added mapping: {0}",
+            ["fg.noForeground"] = "Could not read the foreground app right now",
+
+            // ---------- round 21: mobile companion ----------
+            ["companion.title"] = "Mobile companion",
+            ["companion.enable"] = "Allow control from other devices on this network",
+            ["companion.hint"] = "Opens a small control page on your phone (same Wi-Fi). The server binds to the network only while this is on; every API call needs the session token the page gets with the PIN.",
+            ["companion.open"] = "Open page",
+            ["companion.copy"] = "Copy URL + PIN",
+            ["companion.toggled"] = "Companion setting saved — the control server restarted",
+            ["companion.copied"] = "URL and PIN copied",
+
+            // ---------- round 21: auto-update ----------
+            ["update.title"] = "Updates",
+            ["update.enable"] = "Check GitHub Releases automatically (once a day)",
+            ["update.check"] = "Check now",
+            ["update.version"] = "Installed version: {0}",
+            ["update.uptodate"] = "This is the newest version.",
+            ["update.available"] = "Update {0} is available!",
+            ["update.ready"] = "Version {0} is ready — download it and FullRGB swaps itself in on the next start.",
+            ["update.pending"] = "Downloaded {0}: it will be installed on the next start (or click below).",
+            ["update.checking"] = "Checking GitHub Releases...",
+            ["update.none"] = "You are on the latest version ({0}).",
+            ["update.checkFailed"] = "Update check failed: {0}",
+            ["update.downloading"] = "Downloading update...",
+            ["update.progress"] = "Downloading update... {0:0}%",
+            ["update.downloaded"] = "Update {0} downloaded and verified.",
+            ["update.install"] = "Download {0}",
+            ["update.restartAsk"] = "Update {0} is downloaded and verified. Swap it in and restart FullRGB now?",
+            ["update.restartNow"] = "Restart now",
+            ["update.swapLater"] = "The update is kept — it is installed automatically on the next start.",
+
+            // ---------- round 21: profile share ----------
+            ["ps.export"] = "Export profile",
+            ["ps.import"] = "Import profile",
+            ["ps.code"] = "Share code",
+            ["ps.exportTip"] = "Save the active profile as a shareable file",
+            ["ps.importTip"] = "Add a profile from a shared file",
+            ["ps.codeTip"] = "Copy the active profile as a short code — or paste a friend's code",
+            ["ps.exported"] = "Profile exported: {0}",
+            ["ps.codeCopied"] = "Share code copied — paste it in a chat. You can also paste a friend's code here.",
+            ["ps.pasteTitle"] = "Paste a share code to import (empty = skip)",
+            ["ps.imported"] = "Profile imported: {0}",
+
+            // ---------- round 21: safe mode ----------
+            ["safemode.text"] = "The engine keeps failing ({0} s until the next automatic attempt). Your lights are parked on a dim static colour; the profile comes back on its own once the engine is healthy.",
+            ["safemode.restore"] = "Try now",
+            ["safemode.trying"] = "Trying the engine again...",
+
+            // ---------- round 21: diagnostics export ----------
+            ["hw.exportDiagnostics"] = "Export diagnostics",
+            ["hw.exportDiagnosticsTip"] = "Zip with system info, support matrix, controllers, logs and settings — attach it to bug reports",
+            ["hw.diagnosticsDone"] = "Diagnostics zip written",
+
+            // ---------- round 21: community HID protocols ----------
+            ["hid.title"] = "Community protocols (experimental)",
+            ["hid.explain"] = "Driverless OEM mice/keeps can be lit by importing a shared protocol definition (a small JSON that names the HID report a model uses). Reading is safe and always allowed. WRITES are triple-gated: the file must declare them, you must flip the global switch here, and every test paint asks twice — a guessed report can confuse unknown firmware.",
+            ["hid.modeRead"] = "read-only",
+            ["hid.modeWrite"] = "experimental write declared",
+            ["hid.probe"] = "Probe (read)",
+            ["hid.paint"] = "Test paint",
+            ["hid.import"] = "Import protocol file",
+            ["hid.folder"] = "Open folder",
+            ["hid.writeOn"] = "Experimental writes: ON",
+            ["hid.writeOff"] = "Experimental writes: off",
+            ["hid.writeTip"] = "Global switch for community protocol writes. Read-only needs nothing; writes ask twice every time.",
+            ["hid.writeWarn1"] = "You are about to allow WRITING to driverless devices whose firmware FullRGB does not know. The protocol file's author tested one unit — yours may differ. Continue?",
+            ["hid.writeContinue"] = "I understand the risk",
+            ["hid.writeWarn2"] = "Type FULLRGB to enable experimental writes",
+            ["hid.writeCancelled"] = "Experimental writes stayed off",
+            ["hid.badFile"] = "Protocol file rejected: {0}",
+            ["hid.covers"] = "{0} → community protocol “{1}” loaded (see below)",
+            ["hid.deviceNotFound"] = "Device {0} is not present right now",
+            ["hid.probeFailed"] = "Probe failed: {0}",
+            ["hid.probeOk"] = "Read: {0}",
+            ["hid.paintWarn"] = "One solid-colour report will be written to “{0}”. If the protocol file is wrong, the lighting may stop until the device is unplugged.",
+            ["hid.paintContinue"] = "Write once",
+            ["hid.writeNeeded"] = "Enable experimental writes first (button above)",
+            ["hid.paintOk"] = "Paint written to {0}",
+            ["hid.imported"] = "Protocol imported: {0}",
+
+            // ---------- round 21: CLI ----------
+            ["cli.applied"] = "Applied: {0}",
         },
         ["fa"] = new()
         {
@@ -622,6 +721,105 @@ public static class L10n
             ["scan.cached"] = "{0} دستگاه از اجرای قبلی به یاد مانده است",
             ["scan.cachedMatch"] = "فهرست به‌یادمانده مطابقت داشت ({0} دستگاه) — اسکن کامل رد شد",
             ["scan.cachedMissing"] = "این بار شناسایی نشد: {0} — تنظیماتشان حفظ شد",
+
+            // ---------- round 21: game pulse ----------
+            ["chip.gamepulse"] = "ضربان بازی",
+            ["gp.style"] = "سبک",
+            ["gp.solid"] = "بدنه یکپارچه",
+            ["gp.bar"] = "نوار سلامتی",
+            ["gp.dots"] = "نوار نقطه‌ای",
+            ["fx.gamepulseHint"] = "به رویدادهای بازی که به API محلی فرستاده می‌شوند واکنش نشان می‌دهد (hp، hit، death): با افت سلامتی، رنگ بدنه از رنگ سالم به رنگ خطر می‌رود، ضربه فلاش سفید می‌زند و مرگ قرمز تپش می‌کند. ارسال رویداد با FullRGB.exe --game-event hp 0.5 یا POST /api/event.",
+
+            // ---------- round 21: time schedule ----------
+            ["ts.title"] = "زمان‌بندی ساعت‌ها",
+            ["ts.enable"] = "تعویض پروفایل بر اساس ساعت روز",
+            ["ts.hint"] = "هر خط یک قانون: HH:MM-HH:MM=پروفایل. روزهای هفته هم اختیاری است (Mo-Fr یا Sa,Su). اولین قانون منطبق برنده است؛ بازه می‌تواند از نیمه‌شب بگذرد. نمونه:\n22:00-07:00=شب\nMo-Fr 08:00-18:00=کار",
+
+            // ---------- round 21: per-app profiles ----------
+            ["fg.addCurrent"] = "افزودن برنامهٔ فعلی → پروفایل فعال",
+            ["fg.added"] = "نگاشت اضافه شد: {0}",
+            ["fg.noForeground"] = "الان نتوانستم برنامهٔ فعال را تشخیص دهم",
+
+            // ---------- round 21: mobile companion ----------
+            ["companion.title"] = "همراه موبایل",
+            ["companion.enable"] = "اجازهٔ کنترل از دستگاه‌های دیگر این شبکه",
+            ["companion.hint"] = "یک صفحهٔ کنترل کوچک روی موبایل (همان وای‌فای) باز می‌شود. سرور فقط وقتی این گزینه روشن است به شبکه وصل می‌شود و هر درخواست API به توکن نشست نیاز دارد که صفحه آن را با پین می‌گیرد.",
+            ["companion.open"] = "باز کردن صفحه",
+            ["companion.copy"] = "کپی آدرس + پین",
+            ["companion.toggled"] = "تنظیم همراه ذخیره شد — سرور کنترل ری‌استارت شد",
+            ["companion.copied"] = "آدرس و پین کپی شد",
+
+            // ---------- round 21: auto-update ----------
+            ["update.title"] = "به‌روزرسانی",
+            ["update.enable"] = "بررسی خودکار انتشارهای GitHub (روزی یک بار)",
+            ["update.check"] = "بررسی الان",
+            ["update.version"] = "نسخهٔ نصب‌شده: {0}",
+            ["update.uptodate"] = "همین نسخه، جدیدترین است.",
+            ["update.available"] = "به‌روزرسانی {0} موجود است!",
+            ["update.ready"] = "نسخهٔ {0} آماده است — دانلود کن، FullRGB در استارت بعدی خودش جایگزین می‌شود.",
+            ["update.pending"] = "{0} دانلود شد: در استارت بعدی نصب می‌شود (یا دکمهٔ پایین).",
+            ["update.checking"] = "بررسی انتشارهای GitHub...",
+            ["update.none"] = "روی آخرین نسخه هستی ({0}).",
+            ["update.checkFailed"] = "بررسی به‌روزرسانی ناموفق: {0}",
+            ["update.downloading"] = "در حال دانلود به‌روزرسانی...",
+            ["update.progress"] = "در حال دانلود به‌روزرسانی... {0:0}%",
+            ["update.downloaded"] = "به‌روزرسانی {0} دانلود و تأیید شد.",
+            ["update.install"] = "دانلود {0}",
+            ["update.restartAsk"] = "به‌روزرسانی {0} دانلود و تأیید شده است. جایگزین شود و FullRGB ری‌استارت شود؟",
+            ["update.restartNow"] = "ری‌استارت کن",
+            ["update.swapLater"] = "به‌روزرسانی نگه داشته می‌شود — در استارت بعدی خودکار نصب می‌شود.",
+
+            // ---------- round 21: profile share ----------
+            ["ps.export"] = "خروجی پروفایل",
+            ["ps.import"] = "ورودی پروفایل",
+            ["ps.code"] = "کد اشتراک",
+            ["ps.exportTip"] = "ذخیرهٔ پروفایل فعال به‌صورت فایل قابل اشتراک",
+            ["ps.importTip"] = "افزودن پروفایل از فایل مشترک‌شده",
+            ["ps.codeTip"] = "کپی پروفایل فعال به‌صورت کد کوتاه — یا چسباندن کد دوستان",
+            ["ps.exported"] = "پروفایل خروجی گرفته شد: {0}",
+            ["ps.codeCopied"] = "کد اشتراک کپی شد — در چت بفرست. کد دوستان را هم همین‌جا بچسبان.",
+            ["ps.pasteTitle"] = "کد اشتراک را برای ورودی بچسبان (خالی = رد شدن)",
+            ["ps.imported"] = "پروفایل وارد شد: {0}",
+
+            // ---------- round 21: safe mode ----------
+            ["safemode.text"] = "موتور مدام قطع می‌شود ({0} ثانیه تا تلاش بعدی). نورها روی یک رنگ ثابت کم‌نور پارک شده‌اند؛ به‌محض سالم شدن موتور، پروفایل خودش برمی‌گردد.",
+            ["safemode.restore"] = "همین حالا امتحان کن",
+            ["safemode.trying"] = "در حال امتحان دوبارهٔ موتور...",
+
+            // ---------- round 21: diagnostics export ----------
+            ["hw.exportDiagnostics"] = "خروجی عیب‌یابی",
+            ["hw.exportDiagnosticsTip"] = "زیپ شامل اطلاعات سیستم، ماتریس پشتیبانی، کنترلرها، لاگ‌ها و تنظیمات — برای گزارش باگ ضمیمه کن",
+            ["hw.diagnosticsDone"] = "زیپ عیب‌یابی ساخته شد",
+
+            // ---------- round 21: community HID protocols ----------
+            ["hid.title"] = "پروتکل‌های اجتماعی (آزمایشی)",
+            ["hid.explain"] = "موس/کیبوردهای OEM بی‌درایور را می‌شود با ورود یک تعریف پروتکل مشترک (فایل JSON کوچکی که گزارش HID همان مدل را معرفی می‌کند) روشن کرد. خواندن امن است و همیشه مجاز است. نوشتن سه لایه گارد دارد: فایل باید اعلامش کرده باشد، کلید کلی این‌جا باید روشن شود، و هر «رنگ تستی» دو بار پرسیده می‌شود — یک گزارش اشتباه می‌تواند فریمور ناشناخته را گیج کند.",
+            ["hid.modeRead"] = "فقط خواندن",
+            ["hid.modeWrite"] = "نوشتن آزمایشی اعلام شده",
+            ["hid.probe"] = "پروب (خواندن)",
+            ["hid.paint"] = "رنگ تستی",
+            ["hid.import"] = "ورود فایل پروتکل",
+            ["hid.folder"] = "باز کردن پوشه",
+            ["hid.writeOn"] = "نوشتن آزمایشی: روشن",
+            ["hid.writeOff"] = "نوشتن آزمایشی: خاموش",
+            ["hid.writeTip"] = "کلید سراسری نوشتن به پروتکل‌های اجتماعی. خواندن هیچ گاردی نمی‌خواهد؛ نوشتن هر بار دو بار تأیید می‌خواهد.",
+            ["hid.writeWarn1"] = "قرار است نوشتن روی دستگاه‌های بی‌درایوری مجاز شود که فریمورشان را FullRGB نمی‌شناسد. نویسندهٔ فایل پروتکل یک دستگاه را تست کرده — مال شما ممکن است فرق کند. ادامه می‌دهی؟",
+            ["hid.writeContinue"] = "ریسک را می‌فهمم",
+            ["hid.writeWarn2"] = "برای فعال شدن نوشتن آزمایشی بنویس FULLRGB",
+            ["hid.writeCancelled"] = "نوشتن آزمایشی خاموش ماند",
+            ["hid.badFile"] = "فایل پروتکل رد شد: {0}",
+            ["hid.covers"] = "{0} → پروتکل اجتماعی «{1}» بارگذاری شده (پایین ببین)",
+            ["hid.deviceNotFound"] = "دستگاه {0} همین حالا وصل نیست",
+            ["hid.probeFailed"] = "پروب ناموفق: {0}",
+            ["hid.probeOk"] = "خوانده شد: {0}",
+            ["hid.paintWarn"] = "یک گزارش تک‌رنگ روی «{0}» نوشته می‌شود. اگر فایل پروتکل اشتباه باشد، تا جدا کردن دستگاه نور ممکن است قطع بماند.",
+            ["hid.paintContinue"] = "یک بار بنویس",
+            ["hid.writeNeeded"] = "اول نوشتن آزمایشی را روشن کن (دکمهٔ بالا)",
+            ["hid.paintOk"] = "رنگ روی {0} نوشته شد",
+            ["hid.imported"] = "پروتکل وارد شد: {0}",
+
+            // ---------- round 21: CLI ----------
+            ["cli.applied"] = "اعمال شد: {0}",
         },
     };
 

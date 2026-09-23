@@ -1,0 +1,4 @@
+theme: jekyll-theme-cayman
+title: FullRGB docs
+description: System-wide RGB control for Windows — one app, one file, no plugins.
+show_downloads: true

@@ -1,0 +1,21 @@
+name: Question
+description: Ask about setup, a device, or automation
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before asking: the [docs site](https://scannervpn.github.io/FullRGB/) covers
+        automation, scheduling, community protocols and the common "why" questions
+        (SMBus elevation, "detected but not controllable", sleep/wake).
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: FullRGB version, what the Hardware page shows, anything you already tried.

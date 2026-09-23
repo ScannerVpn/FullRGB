@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Compatibility list
+    url: https://github.com/ScannerVpn/FullRGB/blob/main/COMPATIBILITY.md
+    about: Check whether your device is already known before opening a device report
+  - name: Documentation site
+    url: https://scannervpn.github.io/FullRGB/
+    about: Automation, scheduling, community protocols, troubleshooting
+  - name: Discussions
+    url: https://github.com/ScannerVpn/FullRGB/discussions
+    about: Ideas, protocol-file sharing, and "show and tell" for setups

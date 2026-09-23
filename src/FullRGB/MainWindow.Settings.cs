@@ -91,21 +91,27 @@ public partial class MainWindow
             {
                 await Task.Delay(TimeSpan.FromSeconds(6));
                 if (_reallyExiting || _osShuttingDown) return;
-                Dispatcher.BeginInvoke(async () =>
-                {
-                    try
-                    {
-                        // A repair or the user's own rescan owns the session: theirs already
-                        // re-detects, and a concurrent one would fight for the SDK session.
-                        if (_resuming || _rescanning || _reallyExiting) return;
-                        await RescanAsync();
-                    }
-                    catch { }
-                });
+                // _ = : DispatcherOperation has GetAwaiter(), so the compiler treats the call as
+                // task-like and nags CS4014 without an explicit discard.
+                _ = Dispatcher.BeginInvoke(new Action(() => _ = RunWakeRescan()));
             }
             catch { }
             finally { _autoRescanScheduled = false; }
         });
+    }
+
+    /// <summary>The delayed wake-up rescan body (method group, not an async lambda: an async
+    /// lambda converted to Action is async void and the compiler nags CS4014 at the call site).
+    /// A repair or the user's own rescan owns the session: theirs already re-detects, and a
+    /// concurrent one would fight for the SDK session.</summary>
+    private async Task RunWakeRescan()
+    {
+        try
+        {
+            if (_resuming || _rescanning || _reallyExiting) return;
+            await RescanAsync();
+        }
+        catch { }
     }
 
     private async Task RescanAsync()
@@ -163,8 +169,13 @@ public partial class MainWindow
         AutoRecoverChk.IsChecked = App.Settings.AutoRecoverLighting;
         SchedChk.IsChecked = App.Settings.SchedulerEnabled;
         BuildSchedMinutes();
+        TimeSchedChk.IsChecked = App.Settings.TimeScheduleEnabled;
+        TimeSchedBox.Text = App.Settings.TimeScheduleRules;
         FgChk.IsChecked = App.Settings.ForegroundEnabled;
         FgMapBox.Text = string.Join("\n", App.Settings.ForegroundMap.Select(kv => $"{kv.Key}={kv.Value}"));
+        CompanionChk.IsChecked = App.Settings.CompanionEnabled;
+        RefreshCompanionCard();
+        RefreshUpdateCard();
         BuildAccentSwatches();
         RefreshAdvanced();
         _loadingUi = false;
@@ -681,6 +692,87 @@ public partial class MainWindow
             RefreshStatus();
             ProfileStore.Save(App.Settings);
             SetStatus(L10n.T("backup.restored"), StatusKind.Ok);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+
+    // ---------- round 21: single-profile share (file + short code) ----------
+
+    private void ProfileExport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            PushEdit();
+            var dlg = new System.Windows.Forms.SaveFileDialog
+            {
+                Filter = "FullRGB profile (*.fullrgb.json)|*.fullrgb.json",
+                FileName = ProfileShare.SafeName2(CurrentProfile().Name) + ".fullrgb.json",
+            };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            File.WriteAllText(dlg.FileName, ProfileShare.ExportJson(CurrentProfile()));
+            SetStatus(L10n.T("ps.exported", dlg.FileName), StatusKind.Ok);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+
+    private void ProfileImport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.OpenFileDialog { Filter = "Profile JSON|*.json;*.fullrgb.json" };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            ImportProfile(ProfileShare.ImportJson(File.ReadAllText(dlg.FileName), out var error), error);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+
+    private void ProfileCode_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var code = ProfileShare.ExportCode(CurrentProfile());
+            System.Windows.Clipboard.SetText(code);
+            SetStatus(L10n.T("ps.codeCopied"), StatusKind.Ok);
+            if (PromptDialog.Ask(this, L10n.T("ps.pasteTitle"), "") is { Length: > 0 } pasted)
+                ImportProfile(ProfileShare.ImportCode(pasted, out var error), error);
+        }
+        catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
+    }
+
+    /// <summary>Shared tail of both import paths: dedupe the name, add, switch, save.</summary>
+    private void ImportProfile(Config.Profile? imported, string error)
+    {
+        if (imported is null)
+        {
+            SetStatus(string.IsNullOrEmpty(error) ? L10n.T("backup.invalid") : error, StatusKind.Error);
+            return;
+        }
+        imported.Name = ProfileShare.DedupeName(
+            App.Settings.Profiles.Select(p => p.Name), imported.Name);
+        App.Settings.Profiles.Add(imported);
+        App.Settings.Normalized();
+        ProfileStore.BackupLatest();
+        SwitchProfile(imported.Name);
+        SetStatus(L10n.T("ps.imported", imported.Name), StatusKind.Ok);
+        Diag.AppLog.Info($"profile imported: {imported.Name}");
+    }
+
+    /// <summary>Per-app profiles: append the currently focused exe as a new mapping row.</summary>
+    private void FgAddCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string? exe = ForegroundWatcher.CurrentExe();
+            if (string.IsNullOrWhiteSpace(exe))
+            {
+                SetStatus(L10n.T("fg.noForeground"), StatusKind.Warn);
+                return;
+            }
+            string map = FgMapBox.Text.TrimEnd();
+            string line = $"{exe}={CurrentProfile().Name}";
+            FgMapBox.Text = (map.Length > 0 ? map + "\n" : "") + line;
+            FgMap_Save(FgMapBox, new RoutedEventArgs());
+            SetStatus(L10n.T("fg.added", exe), StatusKind.Ok);
         }
         catch (Exception ex) { SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error); }
     }

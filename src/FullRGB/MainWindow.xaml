@@ -122,6 +122,27 @@
                        Foreground="{StaticResource Warn}"/>
           </Grid>
         </Border>
+
+        <!-- engine safe mode: the engine keeps failing, the lights are parked on a calm static
+             colour and a retry with backoff is running. Restore now = try immediately. -->
+        <Border x:Name="SafeModeBanner" Background="{StaticResource WarnBg}" CornerRadius="10"
+                Padding="13,10" Margin="0,14,0,8" Visibility="Collapsed"
+                BorderBrush="#3A2F16" BorderThickness="1">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                       Foreground="{StaticResource Warn}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <TextBlock x:Name="SafeModeTxt" Grid.Column="1" TextWrapping="Wrap" FontSize="11.5"
+                       Foreground="{StaticResource Warn}" VerticalAlignment="Center"/>
+            <Button x:Name="SafeModeRetryBtn" Grid.Column="2" Style="{StaticResource Btn}"
+                    Click="SafeModeRetry_Click" Margin="10,0,0,0"
+                    Foreground="{StaticResource Warn}" FontSize="11"/>
+          </Grid>
+        </Border>
       </StackPanel>
 
       <!-- ═══ pages ═══ -->
@@ -408,6 +429,14 @@
                             Click="ProfileDel_Click" Content="&#xE74D;" Margin="6,0,0,0"
                             Foreground="{StaticResource Danger}"/>
                   </Grid>
+                  <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button x:Name="ProfileExportBtn" Style="{StaticResource Btn}" Click="ProfileExport_Click"
+                            FontSize="11" Margin="0,0,8,0"/>
+                    <Button x:Name="ProfileImportBtn" Style="{StaticResource Btn}" Click="ProfileImport_Click"
+                            FontSize="11" Margin="0,0,8,0"/>
+                    <Button x:Name="ProfileCodeBtn" Style="{StaticResource Btn}" Click="ProfileCode_Click"
+                            FontSize="11"/>
+                  </StackPanel>
                 </StackPanel>
               </Border>
 
@@ -455,6 +484,19 @@
 
               <Border Style="{StaticResource CardBd}" Margin="0,0,0,12">
                 <StackPanel>
+                  <TextBlock x:Name="TimeSchedHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                  <CheckBox x:Name="TimeSchedChk" Style="{StaticResource Chk}"
+                            Checked="TimeSched_Changed" Unchecked="TimeSched_Changed"/>
+                  <TextBlock x:Name="TimeSchedHint" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             Margin="0,8,0,6"/>
+                  <TextBox x:Name="TimeSchedBox" Style="{StaticResource Inp}" AcceptsReturn="True"
+                           Height="70" VerticalScrollBarVisibility="Auto" LostFocus="TimeSched_Save"
+                           FontFamily="Consolas"/>
+                </StackPanel>
+              </Border>
+
+              <Border Style="{StaticResource CardBd}" Margin="0,0,0,12">
+                <StackPanel>
                   <TextBlock x:Name="FgHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
                   <CheckBox x:Name="FgChk" Style="{StaticResource Chk}"
                             Checked="Fg_Changed" Unchecked="Fg_Changed"/>
@@ -462,6 +504,44 @@
                              Margin="0,8,0,6"/>
                   <TextBox x:Name="FgMapBox" Style="{StaticResource Inp}" AcceptsReturn="True"
                            Height="64" VerticalScrollBarVisibility="Auto" LostFocus="FgMap_Save"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+                    <Button x:Name="FgAddCurrentBtn" Style="{StaticResource Btn}" Click="FgAddCurrent_Click"
+                            FontSize="11"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <Border Style="{StaticResource CardBd}" Margin="0,0,0,12">
+                <StackPanel>
+                  <TextBlock x:Name="CompanionHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                  <CheckBox x:Name="CompanionChk" Style="{StaticResource Chk}"
+                            Checked="Companion_Changed" Unchecked="Companion_Changed"/>
+                  <TextBlock x:Name="CompanionHint" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             Margin="0,8,0,8"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="CompanionOpenBtn" Style="{StaticResource Btn}" Click="CompanionOpen_Click"
+                            FontSize="11" Margin="0,0,8,0"/>
+                    <Button x:Name="CompanionCopyBtn" Style="{StaticResource Btn}" Click="CompanionCopy_Click"
+                            FontSize="11"/>
+                  </StackPanel>
+                  <TextBlock x:Name="CompanionInfoTxt" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             FontFamily="Consolas"/>
+                </StackPanel>
+              </Border>
+
+              <Border Style="{StaticResource CardBd}" Margin="0,0,0,12">
+                <StackPanel>
+                  <TextBlock x:Name="UpdateHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                  <CheckBox x:Name="UpdateChk" Style="{StaticResource Chk}"
+                            Checked="Update_Changed" Unchecked="Update_Changed"/>
+                  <TextBlock x:Name="UpdateTxt" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             Margin="0,9,0,0"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button x:Name="UpdateCheckBtn" Style="{StaticResource Btn}" Click="UpdateCheck_Click"
+                            FontSize="11" Margin="0,0,8,0"/>
+                    <Button x:Name="UpdateInstallBtn" Style="{StaticResource AccentBtn}" Click="UpdateInstall_Click"
+                            FontSize="11" Visibility="Collapsed"/>
+                  </StackPanel>
                 </StackPanel>
               </Border>
 
