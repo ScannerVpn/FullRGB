@@ -1,20 +1,23 @@
 # FullRGB — PLAN.md
 
-**Last updated:** 2026-09-09 (round 14: audio release fix, discrete palette blocks, Ambient + Gaming effects, screen sampling, audit fixes pending)
-**Repo root:** `G:\Ai\RGB Control` (git since v1.0; HEAD `558ebd3` = v1.2.0 round 13)
+**Last updated:** 2026-09-23 (round 20: the machine watches itself — an independent frame watchdog catches a stalled session after sleep/wake/power-loss and rebuilds it without the user; round 18: a real per-user Inno Setup installer; round 17: v1.5.0 — the device inventory is remembered, so a launch no longer rescans from scratch; round 16: the lighting rebuilds itself after sleep/hibernate; round 15: v1.4.0 — arena UI redesign ported, review defects fixed, Persian-first defaults)
+**Repo root:** `G:\Ai\RGB Control` (git since v1.0; pushed to `main` @ `9de3102` = round 20 + missing `DeviceCache.cs`)
 **Status:** WORKING and verified on the real rig.
 
 | Gate | Command | Latest result |
 |---|---|---|
-| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (81+6 asserts incl. silence-decay, palette blocks, Ambient/Gaming) |
-| UI (XAML/resources/glyphs/l10n/bundle/USB) | `FullRGB.exe --uitest` | **ALL UI TESTS PASSED** |
-| Real hardware | `FullRGB.exe --fxtest --seconds=8` | **devices=4, framesSent=964, errors=0** |
+| Logic | `FullRGB.exe --rendertest` | **ALL RENDER TESTS PASSED** (round 20 Debug build, 230 asserts, +44) |
+| UI (XAML/resources/glyphs/l10n/bundle/USB) | `FullRGB.exe --uitest` | **ALL UI TESTS PASSED** (round 20 Debug build) |
+| Stall recovery (real rig) | `FullRGB.exe --stalltest --seconds=120` | **watchdog acted by itself at 20 s; frames 784→3608; hardware updating again: True** |
+| Real hardware | `FullRGB.exe --fxtest --seconds=14` | **devices=4, framesSent=1684, errors=0** (dist29 — not re-run in round 16: the user's GUI was running and holds the SDK session) |
 | Engine task | `FullRGB.exe --enginetask=status` | `registered=True matchesThisInstall=True pawnio=True elevated=False` |
 | USB inventory | `FullRGB.exe --usbscan` | 9 devices; mouse + keyboard identified by product string |
-| Screenshots | `FullRGB.exe --uishot` | 6 PNGs in `%TEMP%\fullrgb-shots` |
+| Screenshots | `FullRGB.exe --uishot` | 4 PNGs at 1280×900 in `%TEMP%\fullrgb-shots` |
 
-**Latest build: `dist16\FullRGB.exe`** (v1.1.0, 83.2 MB single file) + GitHub release
-<https://github.com/ScannerVpn/FullRGB/releases/tag/v1.1.0> (CI-built `FullRGB.exe` + `.sha256`).
+**Latest build: the round-20 Debug tree** (`src\FullRGB\bin\Debug\net8.0-windows\win-x64`) — gates
+run there. `dist34` = v1.5.1 (round 19; see §10e below).
+**NOT released:** the latest GitHub release is still **v1.3.0** and no `v1.4.x` tag exists on the
+remote (verified 2026-09-22 18:35 with `gh release list` + `git ls-remote --tags`).
 Round-12 features: Spectrum/Scanner/Sparkle/Plasma effects, music shapes (bar/mirror/pulse/dots)
 + colourings (gradient/palette/level/rainbow), peak-hold, background colour, sensitivity + beat-flash,
 12 presets, palette + extra-colour editors, rotation scheduler, per-app profiles, per-zone calibration,
@@ -24,6 +27,296 @@ sniffs NUL density instead of assuming; the FAIL veto anchors on `^[FAIL]`/`TEST
 because test names contain "failure". Old `dist12`–`dist14` pruned; `dist15` kept as fallback.
 
 This document is self-contained: an agent can continue from it without reading the codebase first.
+
+---
+
+## 10c. Round 15 (2026-09-11) — v1.4.0: arena UI redesign
+
+The React mock-up in `_arena-src/` (reviewed 2026-09-10, see the session memory) was ported into
+the WPF UI and shipped as v1.4.0. Scope of the diff over v1.3.0 (11 files, ~1600 insertions):
+
+- **Window 1280×900** (MinWidth 1080); `--uishot` renders at the real size now (was 560×700).
+- **Sidebar always physically right**; only `MainCol`/`SidebarFlow`/`TopbarFlow`/`ActionBarFlow`
+  get the RTL FlowDirection (glyphs never mirror).
+- **Default accent `#A487EF` (violet)**, `OnAccent`/`AccentDim`/backdrop bloom retuned;
+  `Language` default **fa** (Persian-first). All three defaults live in ProfileStore.cs AND
+  App.xaml; the rendertest "corrupt falls back"/"bad accent" asserts follow.
+- **Lighting page rebuilt**: hero card (live preview strip + caption), stats row
+  (devices/LEDs/effect/sync), 18-tile effect grid with per-effect vector art strips
+  (`BuildEffectArt`, ~46 px tall — StripFor/SegmentStrip/SpectrumBars/VuBars/ScannerCells/
+  SparkleCells/EmberBar/CometStreak), connected-devices grid, power + quick-profile buttons.
+- **Review defects fixed (all five from 2026-09-10):** quick-profile button label follows
+  `SwitchProfile` (`ProfileQuickBtn.Content` set there, not only in ApplyLanguage);
+  `EngineStateTxt` now shows diag.connected/diag.offline via `UpdateEngineCard()`;
+  subtitle no longer snapped back to the Lighting text (`PageSubtitle()`/`UpdatePageHeading()`);
+  `PowerBtn.Tag` + tooltip synced by `SyncPowerButton()` so the App.xaml Tag trigger works;
+  new l10n keys (page.eyebrow.*, page.h1.*, hero.*, stats.*, effects.*, power.*, engine.*)
+  in BOTH dictionaries (uitest parity gate passed).
+
+Release mechanics: version bump 1.3.0→1.4.0 in csproj (line 14), published to **dist29**
+(`1.4.0+<sha>`), autostart healed to dist29 (`--autostart=ensure` → taskExe=dist29, task-run
+smoke test passed). Gates: rendertest ALL PASSED / uitest ALL PASSED / fxtest devices=4
+framesSent=1684 errors=0 (DRAM 18–19 fps delivered, ASUS/Corsair 30 fps).
+
+---
+
+## 10d. Round 16 (2026-09-22) — the lighting rebuilds itself after sleep/hibernate
+
+**User report (fa):** the app comes up correctly on boot and applies the effect, but after
+hibernate/sleep the effects are not applied and the app does not work; closing it completely and
+reopening it was the only fix.
+
+**Diagnosis — two independent defects:**
+
+1. **The wake-up notification never arrives.** `SystemEvents.PowerModeChanged` needs a message
+   pump and is reproduced as *not firing at all* on Windows 11 after a manual sleep/wake
+   (dotnet/runtime#78162, .NET 6/8: the OS never delivers `PBT_APMRESUMEAUTOMATIC` to the hidden
+   window), and Modern Standby (S0) delivers nothing either — so the round-14 handler never ran.
+2. **Even when it ran, the repair was wrong.** It restarted the engine only if `SdkAliveAsync()`
+   failed. A post-suspend OpenRGB *keeps answering the SDK* (its server thread is healthy) while
+   its USB/HID handles died with the suspend, so the probe reported "alive", no restart happened,
+   and nothing reached the hardware. Closing the app worked because `CloseEngineOnExit`
+   (default true) kills the engine on exit, so reopening necessarily started a fresh one.
+   The old path also gave up after ONE attempt (a failed `ConnectAsync` left `_client`
+   connected-but-dead with `_engine` null, and nothing retried).
+
+**Fix (`MainWindow.xaml.cs`, plus `MainWindow.Settings.cs` and `L10n.cs`):**
+
+- `HookPowerEvents` now runs a **5 s heartbeat** in addition to the (kept) power event. A
+  `DispatcherTimer` cannot tick while the machine is suspended, so a gap of more than 4 × the
+  interval (20 s) can only mean the machine slept. `Environment.TickCount64` counts sleep and
+  hibernate time (`QueryUnbiasedInterruptTime` deliberately does not), and the wall clock is
+  checked as well, so the detector keeps working if a future runtime makes TickCount64 unbiased.
+  `IsResumeGap` is pure and asserted in `--rendertest` §40 (9 asserts: normal tick, late tick,
+  exact boundary, 21 s, 8 h hibernate, unbiased tick + wall clock, backwards clock correction,
+  zero interval).
+- `RecoverAfterResumeAsync` → `TryRestoreLightingAsync`: **always** replaces the engine process
+  (`EngineTask.EndTaskInstance` first when attached to the elevated-task engine, then
+  `RestartAsync`, which kills leftovers and waits for the port to close — so a wedged
+  post-suspend server can never be re-attached), disposes engine/client/WASAPI capture,
+  reconnects (`ConnectAsync` → `OnConnected` → `StartEngine`) and re-applies the profile when
+  effects were running or `AutoStartEffects` is set. **3 attempts** with 3/6/9 s backoff, with all
+  blocking work (`schtasks`, teardown that joins writer threads) pushed off the UI thread. A
+  second suspend arriving mid-repair is remembered (`_resumePending`) instead of dropped.
+- `StartEngine` is re-entrant now: it disposes the previous WASAPI capture and builds the watchdog
+  **once** (a rebuilt engine used to leak an audio capture and stack a second watchdog).
+- `RescanAsync` returns early while a repair is in flight (it would fight the repair for the SDK
+  session). Status strings added to BOTH dictionaries: `status.resume`, `status.resumed`,
+  `status.resumeFailed`.
+
+**Verification:** build 0 warnings; `--rendertest` ALL PASSED (167 asserts, incl. the 9 new ones);
+`--uitest` ALL PASSED (l10n parity gate covers the three new keys). **NOT verified live:** the
+wake-up repair itself still needs a real sleep/hibernate or an `NtSuspendProcess` freeze of the
+GUI. Round 16 stopped at the gates because the user's `dist29` instance was left running (it holds
+the single-instance mutex and the SDK session) and the go-ahead to close it never arrived. To
+verify by hand: run `dist30\FullRGB.exe`, sleep/hibernate the PC, and watch the status pill —
+it should show "Back from sleep — restarting the RGB engine..." and then "Lighting restored after
+wake-up", with the effect back on. `--fxtest` was also not re-run in this round (same reason).
+
+Artifact: `dist30\FullRGB.exe` (v1.4.0, 83.3 MB single file). Autostart still points at dist29;
+`--autostart=ensure` re-points it to whichever copy is launched.
+
+**Rebuild for the user's live test (2026-09-22 18:29):** version bumped to **1.4.1** and published to
+`dist32\FullRGB.exe` (87.3 MB, md5 `cfbc9c1799b9dc4650cc29c51602ac19` — byte-identical to `dist31`,
+so no source change since the 18:07 build). Gates re-run on the published exe: `--rendertest`
+ALL PASSED (incl. the 9 `resume:` asserts) and `--uitest` ALL PASSED. Still not verified live —
+the wake-up repair needs a real sleep/hibernate with the app running.
+
+**UNPUSHED — verified 2026-09-22 18:35 (do this before any new work):** `origin/main` is still
+`1d2b88c` (v1.3.0) and the remote has no `v1.4.0` tag; `gh release list` shows v1.3.0 as the latest
+release. Rounds 15 + 16 (~1885 insertions over 13 files) therefore exist ONLY as uncommitted
+working-tree changes on this machine — there is no backup. Sequence: commit → tag `v1.4.1` → push →
+`gh workflow run windows-build.yml -f tag=v1.4.1` (never upload the 84 MB asset locally, §0).
+`git status -sb` also shows the stale marker `main...origin/main [gone]`; re-run
+`git branch --set-upstream-to=origin/main main` after the fetch.
+
+---
+
+## Round 20 (2026-09-23) — the machine watches itself: the independent lighting watchdog
+
+**User report:** effects stop after a wake-up; the app itself looks alive (its own probes answer),
+the LEDs are dark, and only "close and reopen" fixes it. Forensics confirmed the frozen session
+live: `_probe/live_state.py` (READ-ONLY — reads the colours the SERVER holds, never writes one)
+showed the running session had not moved a single stored colour since the 08:39 wake.
+
+**Diagnosis — why rounds 16–19 could not catch it:**
+
+Every recovery path so far asked the engine a question through the SAME client the app paints
+with. A post-suspend engine keeps its server thread healthy and answers every probe
+(`SdkAliveAsync`, controller counts, protocol version) while its USB/HID handles died with the
+suspend. "The engine is alive" was reported truthfully; nothing was repaired.
+
+The mechanism, proven twice on the real rig before any C# was written:
+- `_probe/stall_probe.py` (A): a reader socket SEES the frames the app paints — readback works,
+  so the test signal is real.
+- `_probe/verify_stall.py`: the running session was ALREADY frozen (`baseline: painting=False`).
+- `_probe/wedge_mech.py`: 40 clients that connect and never read their replies wedged the
+  engine's writer threads — the exact freeze shape — and the server RECOVERED when they were
+  released, so the fix does not need to restart the engine, only to notice.
+
+**Fix — three new pieces (`Setup/`), all pure logic unit-tested:**
+
+1. `PowerMonitor.cs` — decodes the raw `WM_POWERBROADCAST` wParam (0x04 suspend; 0x06/0x07/0x12
+   resumes) and `WM_WTSSESSION_CHANGE` lParam (logon/logoff/lock/unlock/console) itself. The
+   managed `SystemEvents.PowerModeChanged` event was reproduced as NOT FIRING on Windows 11 —
+   this cannot be trusted again. `MainWindow` now hosts a hidden message window and acts on the
+   decoded events (`BeginResumeRecovery` on resume; lock/unlock refresh the session clock).
+2. `EngineShadow.cs` — probes the engine from the SIDE, never through the app's client:
+   - TCP facts via `GetExtendedTcpTable` (iphlpapi) — is 6742 still LISTENING, how many
+     ESTABLISHED clients. (A `/proc/net/tcp` read was tried first: that file is MSYS-only and
+     does not exist for a native Win32 process — the Win32 API is the source.)
+   - Per-device LED totals and a hash of the colours the engine HOLDS (readback, not our writes).
+   - `Decide(...)` is pure: dead port → Repair; listening with nobody attached → Repair; zones
+     back to 0 LEDs → Rebuild; TWO consecutive strikes of "no stored colour moved on an animated
+     effect" → Repair (one strike only warns). Unreadable TCP table → no claim at all.
+3. `LightingWatchdog.cs` — one threading-timer probe/minute (NOT a DispatcherTimer: it must tick
+   while the UI thread is blocked, and a headless host has no message pump — the first version
+   never fired in `--stalltest` because of exactly that). On a verdict it calls the same repair
+   path a manual "close and reopen" uses. Opt-out checkbox: `settings.autorecover` (fa+en).
+
+**`--stalltest` (new, `SelfTest.cs`)** — the end-to-end proof, headless, on the REAL engine:
+joins the running engine, streams a real effect (frames stored in the hardware's colours are
+verified by readback), wedges 40 non-reading clients, starts the watchdog, and REQUIRES the
+watchdog to notice and act with no help. Verified live:
+
+```
+[stalltest] 40 non-reading clients attached
+[stalltest] watchdog verdict Rebuild at 20.0s (listen=True conns=46 leds=233)
+[stalltest] frames 784 -> 3608, hardware updating again: True
+[stalltest] SUMMARY stallBuilt=True watchdogActed=True zonesStuck=False zonesRestored=True paintingAgain=True frames=3608
+```
+
+**Bugs found and fixed on the way (all mine):** WTS logon (0x6) missing from the decode table;
+the one-strike rule first returned Wait instead of Ok; `DispatcherTimer` never ticked headless
+(threading timer now); `/proc/net/tcp` does not exist for Win32 (GetExtendedTcpTable now);
+`TcpRow` state codes are MIB values (LISTEN=2, ESTABLISHED=5), not /proc hex (0A/01); the port is
+the LOW 16 bits of the packed address in network order (test vector first asserted the wrong
+byte order); `SecondsSinceSession = 0` in the harness was read as "grace period" (now 300);
+`Config/DeviceCache.cs` had never been committed (round 17) — it broke CI on the first push of
+this round and is now in the repo.
+
+**Verification:** `--rendertest` **ALL PASSED (230 asserts, +44)** — power decode, session decode,
+watchdog verdicts, TCP facts, byte order, listener-only sessions; `--uitest` ALL PASSED; real-rig
+`--stalltest` as above; CI (Debug build + headless gates) green after the DeviceCache fix.
+`--fxtest` still not re-run (the user's GUI holds the SDK session). NOT verified live: a real
+sleep/hibernate with the watchdog build running — the stalltest builds the same failure shape,
+but an actual S3/S0 wake remains a by-hand test.
+
+---
+
+## Round 17 — the device inventory is remembered (v1.5.0)
+
+The user's report: "settings should be saved once and the detected parts saved too, so it does not
+scan from scratch every launch." Settings were already persisted (`ProfileStore` → `settings.json`);
+what was missing was a memory of the HARDWARE. Three separate wins came out of one cache:
+
+1. **The splash names the known parts before the engine answers.** `App.DeviceCache` is loaded in
+   `OnStartup` (GUI path only — headless verbs must not touch user files) and the splash logs
+   `scan.cached` immediately.
+2. **The detect loop can finish early.** `StartupWindow.ContinueToEngineAsync` used a flat 5 s
+   settle wait plus `stable >= 2 && i >= 4` (≈4.5 s of polling). With a remembered count the wait
+   drops to 1.5 s and the `i >= 4` floor is waived once the count matches what we remember
+   (`stable >= 2 && (i >= 4 || now == remembered)`). A PARTIAL answer never matches, so a cold boot
+   still gets the full window and the 0-device restart guard is untouched. Net: ≈5 s off a warm
+   launch, ≈0 when the hardware differs.
+3. **A short scan can no longer delete the user's settings.** `Profile.PruneTo` only protected
+   against a completely EMPTY scan; a cold boot that brought up three of four devices silently
+   deleted the fourth one's overrides, calibration and LED counts. It now takes an optional
+   `rememberedKeys` (the cache's `KnownKeys()`) and `MainWindow` passes it from `OnConnected` and
+   the Rescan path. A device is only pruned once it has been gone for the whole retention window.
+
+`Config/DeviceCache.cs` (new) — `CachedDevice`/`CachedZone` + `devices.json` next to `settings.json`.
+Deliberately a SEPARATE file: settings are the user's data (backed up, exported, imported) while this
+is a hardware observation that must be safe to delete, so a corrupt cache can never cost the user
+their lighting configuration.
+
+**Merge policy** (the part that has to be right): a device that answers is refreshed
+(`LastSeenUtc`, `SeenCount++`, fresh zones); a device that stays silent is KEPT — that is the whole
+point, a short scan must not erase identity; a device silent for `KeepMissingDays = 30` is swept, so
+hardware removed for good does not keep its settings alive forever. Hard cap 200 devices.
+`Merge` is **pure** (returns a new cache, never mutates the receiver) — an earlier version mutated
+and returned `this`, which made the round-17 test save an already-swept cache and crash on
+`Single()`; `--rendertest` now asserts the non-mutation too.
+`Signature` = 16 hex chars of SHA-256 over `key|zoneCount|ledCount` lines, so "same hardware" is
+distinguishable from "same device count".
+
+**Verification:** build 0 warnings; `--rendertest` **ALL PASSED (186 asserts, +19)**: the merge
+policy, retention sweep, signature, `MissingFrom`, `PruneTo` with and without remembered keys, and a
+JSON round-trip incl. missing/corrupt files. `--uitest` ALL PASSED (l10n parity covers the three new
+keys: `scan.cached`, `scan.cachedMatch`, `scan.cachedMissing`, in both dictionaries).
+Artifact: `dist33\FullRGB.exe` (v1.5.0, 87.3 MB, md5 `aa9bebf83564855b48136c318c989aeb`), gates run
+on the published exe. **Not yet verified live:** the early-exit path needs one real launch to write
+`%APPDATA%\FullRGB\devices.json` and a second launch to take the fast path.
+
+---
+
+## Round 18 — a real installer (Inno Setup, per-user)
+
+The user asked for an installer instead of the portable exe. `installer/FullRGB.iss` (Inno Setup 6,
+already present on this machine at `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`).
+
+Build:
+```
+ISCC.exe /DAppVersion=1.5.0 /DDistDir=..\dist33 installer\FullRGB.iss
+→ installer\Output\FullRGB-Setup-<version>.exe
+```
+`AppVersion` and `DistDir` are #define-overridable so CI can build a release without editing the
+file. Artifact: `installer\Output\FullRGB-Setup-1.5.0.exe` — 81,876,599 bytes, md5
+`6c46a988a559f06a3d63476d83ead92d`.
+
+**Design decisions**
+- **Per-user install** (`PrivilegesRequired=lowest` → `{localappdata}\Programs\FullRGB`). The app is
+  `asInvoker` and never needs admin, so the installer must not ask for UAC either. The RGB-RAM
+  feature still raises its ONE UAC from inside the app — unchanged.
+- **One file to install.** The 13 MB OpenRGB engine is embedded in the exe, so there is no vendor
+  tree to lay down. `[Files]` copies `FullRGB.exe` + `README.md` + `LICENSE` and nothing else.
+- **User data is deliberately outside `{app}`** (`%APPDATA%\FullRGB`, `%LOCALAPPDATA%\FullRGB`), so
+  an update or uninstall cannot take it and `[UninstallDelete]` can remove `{app}` outright.
+- **Languages:** English + Arabic + Turkish (the three Inno ships closest to the Persian-first UI).
+  Persian is NOT bundled with Inno Setup; a line in `[Languages]` accepts `installer\Persian.isl`
+  if one is ever added. The installer is English-by-default on purpose.
+- `[Code]` uninstaller removes the two Scheduled Tasks the APP creates (`FullRGB` logon task,
+  `FullRGB-Engine` elevated engine task) via PowerShell — Windows knows nothing about them, so
+  without this an uninstall leaves a logon task pointing at a deleted exe (the exact 0x80070002
+  stale-path bug `Autostart.EnsureCurrent` already self-heals).
+
+**Two bugs found by actually running it** (both were mine, both are now fixed):
+1. `Format('%.0f MB', [...])` — Inno's `Format` has no `%f`. Threw
+   `Runtime error (at 9:916): Format '%.0f MB' invalid or incompatible with argument` inside
+   `InitializeUninstall`, which ABORTED the entire uninstall (nothing was removed). Replaced with
+   integer math (`DirSizeBytes` recursion + `IntToStr(Total div 1048576) + ' MB'`). Inno also needs
+   helper functions declared before their callers, so `DirSizeBytes` precedes `DirSizeMb`.
+2. **The uninstaller deleted the author's real `settings.json`, `devices.json` and `backups\`.**
+   The data prompt was `MsgBox(..., MB_YESNO)` and `if Keep = IDYES then delete` — with
+   `/SUPPRESSMSGBOXES` Inno answers the FIRST button, so an unattended uninstall silently chose
+   "delete". Fixed with two hard rules, now in the script comments: an unattended uninstall
+   (`UninstallSilent`) NEVER deletes user data and is never even asked; the interactive prompt
+   defaults to **No** (`MB_DEFBUTTON2`) and returns early unless the user explicitly says yes.
+   Deleting profiles/calibrations is now something a human must actively request.
+   Lost in the test: settings.json, devices.json, backups\ (the `%LOCALAPPDATA%\FullRGB\engine`
+   cache survived). `devices.json` rebuilds itself on the next launch; the settings did not.
+
+**Verification (install → uninstall → install, all silent, to scratch dirs)**
+- Install/verification log: `Installation process succeeded`, installed `FullRGB.exe` is
+  byte-identical to `dist33\FullRGB.exe` (md5 `aa9bebf83564855b48136c318c989aeb`), Start Menu
+  shortcut created, version metadata reads `FullRGB Setup / 1.5.0 / ScannerVpn`.
+- Uninstall: `{app}` removed, Start Menu shortcut removed, **no `Runtime error` in the log**, and
+  with seeded data in place `settings.json` + `devices.json` + `backups\` + the 27 MB engine cache
+  all survived.
+- The `RemoveTask` PowerShell snippet was executed against a non-existent task and returns cleanly
+  (the uninstaller's path on a machine that never enabled autostart).
+- **Not verified from here:** the task-removal half of the uninstaller could not be proven end to
+  end — this agent session is unelevated and the Task Scheduler ACL refuses `Register-ScheduledTask`
+  for anything it did not create, so a throwaway task could not be seeded, and `schtasks.exe` is on
+  the sandbox's program blacklist. The command itself is verified clean (above); run the installer
+  on a machine with autostart enabled to confirm the task disappears.
+- **Collateral, repaired:** seeding a task named `FullRGB` overwrote the user's real logon task. It
+  was re-registered to its exact original shape — `G:\Ai\RGB Control\dist29\FullRGB.exe`, no args,
+  `-AtLogOn`, `-UserId Sajad -LogonType Interactive -RunLevel Limited`, workdir = the exe folder,
+  `AllowStartIfOnBatteries`/`DontStopIfGoingOnBatteries`, `ExecutionTimeLimit=PT0S`,
+  `MultipleInstances=IgnoreNew`, `StartWhenAvailable` — i.e. identical to
+  `Autostart.BuildRegisterScript`. Note it points at **dist29** (the app rewrites it to whatever
+  copy it is launched from, so running `dist33\FullRGB.exe` moves it forward on its own).
 
 ---
 
@@ -651,7 +944,7 @@ Artifacts: `dist23\FullRGB.exe` (87.3 MB, 14:03 — dist22 is LOCKED by the runn
 instance, per PLAN §7). Gates: rendertest ALL PASSED, uitest ALL PASSED, fxtest dist23
 devices=4 framesSent=724 errors=0.
 
-## 10b. Round 13 (2026-09-06) — v1.2.0: never require Task Manager again
+## 10a. Round 13 (2026-09-06) — v1.2.0: never require Task Manager again
 
 **User report:** "OpenRGB wouldn't close; I killed it from Task Manager and everything worked."
 Diagnosis: a wedged engine holds the SDK port but never answers; `StartAsync` attached on
