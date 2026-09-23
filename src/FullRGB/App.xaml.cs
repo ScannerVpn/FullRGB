@@ -8,6 +8,29 @@ namespace FullRGB;
 public partial class App : Application
 {
     public static AppSettings Settings { get; set; } = new();
+
+    /// <summary>
+    /// Every RGB part this machine has ever shown. Loaded before the splash so the app can name
+    /// the known hardware immediately, and used to keep per-device settings when a device is
+    /// missing from one scan. Null in headless runs (they must not touch user files).
+    /// </summary>
+    public static DeviceCache? DeviceCache { get; set; }
+
+    /// <summary>
+    /// Folds a live scan into the remembered inventory and persists it. Called from the splash and
+    /// from every successful connect/rescan. Never throws.
+    /// </summary>
+    public static void RememberDevices(IEnumerable<SDK.RgbController> devices)
+    {
+        try
+        {
+            var cache = (DeviceCache ?? new DeviceCache()).Merge(devices, DateTime.UtcNow);
+            DeviceCache = cache;
+            DeviceCache.Save(cache);
+        }
+        catch { /* remembering the inventory is best-effort */ }
+    }
+
     private static Mutex? _singleInstance;
     private static bool _headless; // --rendertest/--uitest/etc must never touch settings.json
 
@@ -135,6 +158,23 @@ public partial class App : Application
             return;
         }
 
+        // --stalltest: headless proof of the frame watchdog. Joins the running engine, applies the
+        // configured effect through the REAL EffectEngine, then wedges every one of its write
+        // sockets with a non-reading client so the engine stops applying frames — the state the
+        // user could only clear by hand. The watchdog must decide Repair on its own, and frames
+        // must reach the hardware again WITHOUT any user action.
+        if (e.Args.Any(a => a.Equals("--stalltest", StringComparison.OrdinalIgnoreCase)))
+        {
+            _headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            int secs2 = 150;
+            var sArg2 = e.Args.FirstOrDefault(a => a.StartsWith("--seconds=", StringComparison.OrdinalIgnoreCase));
+            if (sArg2 is not null && int.TryParse(sArg2.Split('=')[1], out var parsed2)) secs2 = parsed2;
+            var code2 = Task.Run(() => SelfTest.RunStallTestAsync(secs2)).GetAwaiter().GetResult();
+            Shutdown(code2);
+            return;
+        }
+
         // --usbscan: list every present USB/HID device with its VID:PID and the product string the
         // DEVICE reports. Used to answer "why isn't my mouse in the list?" with evidence.
         if (e.Args.Any(a => a.Equals("--usbscan", StringComparison.OrdinalIgnoreCase)))
@@ -180,6 +220,7 @@ public partial class App : Application
         // needs PawnIO + admin. That is offered explicitly in Settings → Advanced instead of
         // forcing a UAC prompt on every launch.
         Settings = ProfileStore.Load();
+        DeviceCache = Config.DeviceCache.Load();
         StartupWindow.StartupWarning = ProfileStore.LastLoadError;
         L10n.Set(Settings.Language);
         Theme.ApplyAccent(Settings.AccentHex);

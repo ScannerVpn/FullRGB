@@ -173,6 +173,17 @@ public sealed class EffectEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Forgets which frames were already written, so the next Apply pushes a frame for EVERY zone
+    /// even if its pixels are identical to the last one. Needed after a colour was set behind our
+    /// back (a re-opened session, a repair) and after a zone rebuild: the dedupe cache would
+    /// otherwise suppress the very frame that brings the hardware back.
+    /// </summary>
+    public void InvalidateFrames()
+    {
+        lock (_lastFrame) _lastFrame.Clear();
+    }
+
     public void Stop()
     {
         lock (_lifecycleLock) StopLocked();

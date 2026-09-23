@@ -99,24 +99,43 @@ public sealed class Profile
             ? (int)Math.Clamp((uint)n, zone.LedsMin, Math.Min(zone.LedsMax, int.MaxValue))
             : (int)zone.LedsMax;
 
-    /// <summary>Drops overrides/sizes that no longer match any present device (keeps files from bloating).</summary>
-    public void PruneTo(IEnumerable<RgbController> devices)
+    /// <summary>
+    /// Drops overrides/sizes that no longer match any present device (keeps files from bloating).
+    ///
+    /// <paramref name="rememberedKeys"/> is what makes this safe. An empty scan is already ignored,
+    /// but a PARTIAL scan (cold boot brings up three of four devices) used to silently delete the
+    /// fourth one's overrides, calibration and LED counts — the user then had to set them up again.
+    /// Passing the DeviceCache keys means only hardware that has been gone for the whole retention
+    /// window is ever pruned.
+    /// </summary>
+    public void PruneTo(IEnumerable<RgbController> devices, IEnumerable<string>? rememberedKeys = null)
     {
-        var keys = devices.Select(d => d.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var names = devices.Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (keys.Count == 0) return;
-        // Keep entries matching EITHER Key (new) or Name (legacy): EffectFor falls back to Name.
-        foreach (var k in DeviceOverrides.Keys.Where(k => !keys.Contains(k) && !names.Contains(k)).ToList())
+        var list = devices.ToList();
+        if (list.Count == 0 && (rememberedKeys is null || !rememberedKeys.Any())) return;
+
+        // One set for both kinds of identity: a device is known if EITHER its Key (new) or its
+        // Name (legacy entries) matches. EffectFor falls back to Name, so both must be honoured.
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in list)
+        {
+            if (!string.IsNullOrEmpty(d.Key)) known.Add(d.Key);
+            if (!string.IsNullOrEmpty(d.Name)) known.Add(d.Name);
+        }
+        if (rememberedKeys is not null)
+            foreach (var k in rememberedKeys)
+                if (!string.IsNullOrEmpty(k)) known.Add(k);
+
+        foreach (var k in DeviceOverrides.Keys.Where(k => !known.Contains(k)).ToList())
             DeviceOverrides.Remove(k);
-        foreach (var k in Calibrations.Keys.Where(k => !keys.Contains(k) && !names.Contains(k)).ToList())
+        foreach (var k in Calibrations.Keys.Where(k => !known.Contains(k)).ToList())
             Calibrations.Remove(k);
-        foreach (var k in ZoneOverrides.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
+        foreach (var k in ZoneOverrides.Keys.Where(k => !known.Contains(DevicePart(k))).ToList())
             ZoneOverrides.Remove(k);
-        foreach (var k in ZoneSizes.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
+        foreach (var k in ZoneSizes.Keys.Where(k => !known.Contains(DevicePart(k))).ToList())
             ZoneSizes.Remove(k);
-        foreach (var k in ZoneCalibrations.Keys.Where(k => !keys.Contains(DevicePart(k)) && !names.Contains(DevicePart(k))).ToList())
+        foreach (var k in ZoneCalibrations.Keys.Where(k => !known.Contains(DevicePart(k))).ToList())
             ZoneCalibrations.Remove(k);
-        ExcludedDevices.RemoveAll(x => !keys.Contains(x) && !names.Contains(x));
+        ExcludedDevices.RemoveAll(x => !known.Contains(x));
 
         static string DevicePart(string zoneKey)
         {
@@ -128,13 +147,13 @@ public sealed class Profile
 
 public sealed class AppSettings
 {
-    public string Language { get; set; } = "en"; // en | fa
+    public string Language { get; set; } = "fa"; // en | fa — arena FullRGB is Persian-first
     public int ServerPort { get; set; } = 6742;
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; }
 
     /// <summary>UI accent colour (hex). Also used for the brand ring and the toggles.</summary>
-    public string AccentHex { get; set; } = "#00E5FF";
+    public string AccentHex { get; set; } = "#A487EF";
 
     /// <summary>Restore the last effect and start painting as soon as the app launches.</summary>
     public bool AutoStartEffects { get; set; } = true;
@@ -172,6 +191,14 @@ public sealed class AppSettings
     /// until the hash changes again. Re-registration is then opt-in from Hardware → Advanced.</summary>
     public bool EngineTaskDeclined { get; set; }
 
+    /// <summary>
+    /// Lets the app notice BY ITSELF that the lighting stopped reaching the hardware after a wake-up
+    /// (or a power cut, or a stale engine) and rebuild the session, instead of leaving the user to
+    /// press Rescan. On by default: the check is a once-a-minute read-only probe, and it never
+    /// touches a static colouring. Off = the old behaviour (manual Rescan only).
+    /// </summary>
+    public bool AutoRecoverLighting { get; set; } = true;
+
     public string ActiveProfile { get; set; } = "Default";
     public List<Profile> Profiles { get; set; } = new() { new() };
 
@@ -203,7 +230,7 @@ public sealed class AppSettings
             ActiveProfile = Profiles[0].Name;
         if (Language != "fa") Language = "en";
         if (ServerPort is < 1 or > 65535) ServerPort = 6742;
-        if (!IsHexColor(AccentHex)) AccentHex = "#00E5FF";
+        if (!IsHexColor(AccentHex)) AccentHex = "#A487EF";
         if (double.IsNaN(SchedulerMinutes) || SchedulerMinutes < 1) SchedulerMinutes = 1;
         if (SchedulerMinutes > 180) SchedulerMinutes = 180;
         ForegroundMap ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -223,7 +250,7 @@ public sealed class AppSettings
 
 public static class ProfileStore
 {
-    private static string Dir => Path.Combine(
+    internal static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FullRGB");
 
     private static string SettingsPath => Path.Combine(Dir, "settings.json");

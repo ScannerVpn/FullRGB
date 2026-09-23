@@ -146,7 +146,7 @@ public static class RenderTests
         Check("settings: roundtrip", loaded.Language == "fa" && loaded.ActiveProfile == "P" && loaded.Profiles.Count == 1 && loaded.Profiles[0].Name == "P");
         File.WriteAllText(spath, "{ not valid json");
         var corrupt = Config.ProfileStore.LoadFrom(spath);
-        Check("settings: corrupt falls back", corrupt.Language == "en");
+        Check("settings: corrupt falls back", corrupt.Language == "fa");
         try { Directory.Delete(sdir, true); } catch { }
 
         // ---- 12. autostart task script (ScheduledTasks module: schtasks /Create mis-splits
@@ -308,6 +308,17 @@ public static class RenderTests
               !prof.DeviceOverrides.ContainsKey("Ghost@usb-9") && !prof.ZoneSizes.ContainsKey("Ghost@usb-9|0"));
         Check("prune: present device kept", prof.DeviceOverrides.ContainsKey(pdev.Key));
 
+        // The dangerous case is a PARTIAL scan: a cold boot brings up three of four devices and the
+        // fourth one's overrides used to be deleted for good. The remembered inventory prevents it.
+        prof.DeviceOverrides["Ghost@usb-9"] = new Effects.EffectDef();
+        prof.ZoneSizes["Ghost@usb-9|0"] = 5;
+        prof.PruneTo(new[] { pdev }, new[] { "Ghost@usb-9" });
+        Check("prune: a remembered device keeps its settings",
+              prof.DeviceOverrides.ContainsKey("Ghost@usb-9") && prof.ZoneSizes.ContainsKey("Ghost@usb-9|0"));
+        prof.PruneTo(new[] { pdev }, Array.Empty<string>());
+        Check("prune: with nothing remembered the old behaviour stands",
+              !prof.DeviceOverrides.ContainsKey("Ghost@usb-9"));
+
         // ---- 21. settings normalisation repairs hand-edited files ----
         var messy = new Config.AppSettings { Language = "de", ServerPort = 0, AccentHex = "nope", ActiveProfile = "gone" };
         messy.Profiles.Clear();
@@ -317,7 +328,7 @@ public static class RenderTests
         messy.Normalized();
         Check("settings: bad language falls back to en", messy.Language == "en");
         Check("settings: bad port falls back", messy.ServerPort == 6742);
-        Check("settings: bad accent falls back", messy.AccentHex == "#00E5FF");
+        Check("settings: bad accent falls back", messy.AccentHex == "#A487EF");
         Check("settings: duplicate names made unique",
               messy.Profiles.Select(p => p.Name).Distinct().Count() == messy.Profiles.Count);
         Check("settings: active profile repaired",
@@ -732,6 +743,239 @@ public static class RenderTests
         bool flash = gOn[0] > gBody[0] && gOn[1] > gBody[1] && gOn[2] > gBody[2];
         Check("gaming: beat flashes brighter than the body", flash,
               $"({gOn[0]},{gOn[1]},{gOn[2]}) vs body ({gBody[0]},{gBody[1]},{gBody[2]})");
+
+        // ---- 40. round 15: sleep/hibernate detection ("lights die after a wake-up") ----
+        // The heartbeat is a 5 s DispatcherTimer. It cannot tick while the machine is suspended,
+        // so a gap several times its own interval means the machine slept; 20 s (4 ×) is far
+        // beyond any dispatcher delay a busy UI thread could produce.
+        const long hb = 5000;
+        Check("resume: a normal heartbeat is not a resume", !MainWindow.IsResumeGap(hb, hb, hb));
+        Check("resume: a late tick is not a resume", !MainWindow.IsResumeGap(12000, 12000, hb));
+        Check("resume: exactly 4x the interval is not a resume", !MainWindow.IsResumeGap(4 * hb, 4 * hb, hb));
+        Check("resume: a 21 s freeze is a resume", MainWindow.IsResumeGap(4 * hb + 1, 4 * hb + 1, hb));
+        Check("resume: 8 h of hibernate is a resume",
+              MainWindow.IsResumeGap(8 * 3600 * 1000L, 8 * 3600 * 1000L, hb));
+        // TickCount64 counts suspend time today, but .NET 11 makes it unbiased: the wall clock
+        // alone must still catch the hibernate, and a clock correction alone must not fire.
+        Check("resume: unbiased tick + wall clock still detects the sleep",
+              MainWindow.IsResumeGap(hb, 8 * 3600 * 1000L, hb));
+        Check("resume: an unbiased tick with a normal clock is quiet",
+              !MainWindow.IsResumeGap(hb, hb, hb));
+        Check("resume: a backwards clock correction is quiet",
+              !MainWindow.IsResumeGap(hb, -3600 * 1000L, hb));
+        Check("resume: a zero interval never fires", !MainWindow.IsResumeGap(600000, 600000, 0));
+
+        // ---- 41. round 17: the remembered device inventory ----
+        // The point of the cache is that a scan which comes back SHORT must not be treated as
+        // "this hardware is gone". Everything below is the merge policy that guarantees it.
+        static SDK.RgbController Dev(string name, string loc, int leds, int zones = 1)
+        {
+            var d = new SDK.RgbController
+            {
+                Name = name, Location = loc, DeviceType = (uint)SDK.RgbDeviceType.Cooler,
+                LedNames = Enumerable.Range(0, leds).Select(i => $"LED {i}").ToList(),
+            };
+            for (int i = 0; i < zones; i++)
+                d.Zones.Add(new SDK.RgbZone { Index = i, Name = $"Zone {i}", LedsMin = 0, LedsMax = 10, LedsCount = 10 });
+            return d;
+        }
+
+        var t0 = new DateTime(2026, 9, 22, 18, 0, 0, DateTimeKind.Utc);
+        var cache = Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 64), Dev("Aura", "pci-0", 40) }, t0);
+        Check("cache: a snapshot remembers every device", cache.Devices.Count == 2);
+        Check("cache: devices are keyed the way profiles are", cache.Has("Commander Core@usb-1"));
+        Check("cache: hardware never seen is not remembered", !cache.Has("Ghost@usb-9"));
+
+        var partial = cache.Merge(new[] { Dev("Commander Core", "usb-1", 64) }, t0.AddMinutes(5));
+        Check("cache: merging leaves the source snapshot alone", cache.Devices.Count == 2);
+        Check("cache: a device missing from this scan is kept", partial.Devices.Count == 2);
+        Check("cache: the missing device keeps its last-seen stamp",
+              partial.Devices.Single(d => d.Key == "Aura@pci-0").LastSeenUtc == t0);
+        Check("cache: the present device is refreshed",
+              partial.Devices.Single(d => d.Key == "Commander Core@usb-1").LastSeenUtc == t0.AddMinutes(5));
+        Check("cache: repeat sightings are counted",
+              partial.Devices.Single(d => d.Key == "Commander Core@usb-1").SeenCount == 2);
+        Check("cache: a device that answered is reported as present",
+              partial.MissingFrom(new[] { Dev("Commander Core", "usb-1", 64) }).Single() == "Aura");
+
+        // …but hardware that stays gone for the whole retention window IS forgotten, so a part
+        // pulled out for good does not keep its settings alive forever.
+        var swept = partial.Merge(Array.Empty<SDK.RgbController>(), t0.AddDays(Config.DeviceCache.KeepMissingDays + 1));
+        Check("cache: hardware gone past the retention window is swept", swept.Devices.Count == 0);
+
+        var sigBase = Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 64) }, t0).Signature;
+        Check("cache: identical hardware has an identical signature",
+              Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 64) }, t0).Signature == sigBase);
+        Check("cache: more LEDs change the signature",
+              Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 72) }, t0).Signature != sigBase);
+        Check("cache: an extra zone changes the signature",
+              Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 64, zones: 2) }, t0).Signature != sigBase);
+
+        var cachePath = Path.Combine(Path.GetTempPath(), $"fullrgb-cache-{Guid.NewGuid():N}.json");
+        try
+        {
+            Config.DeviceCache.SaveTo(cachePath, partial);
+            var back = Config.DeviceCache.LoadFrom(cachePath);
+            Check("cache: round-trips through JSON",
+                  back is not null && back.Devices.Count == partial.Devices.Count);
+            Check("cache: zones survive the round trip",
+                  back is not null && back.Devices.Single(d => d.Key == "Commander Core@usb-1").Zones.Count == 1);
+            Check("cache: a missing file is a miss, not a crash",
+                  Config.DeviceCache.LoadFrom(cachePath + ".nope") is null);
+            File.WriteAllText(cachePath, "{ not json at all");
+            Check("cache: a corrupt file is a miss, not a crash",
+                  Config.DeviceCache.LoadFrom(cachePath) is null);
+        }
+        finally { try { File.Delete(cachePath); } catch { } }
+
+        // ---- 42. round 19: the automatic follow-up rescan after boot/wake ----
+        // Boot and wake can both conclude while USB enumeration is still running; the cache's
+        // remembered count is the oracle that says "something is still missing, look again".
+        Check("followup: a full inventory needs no follow-up scan", !MainWindow.NeedsFollowupScan(4, 4));
+        Check("followup: an empty session with remembered hardware is re-scanned", MainWindow.NeedsFollowupScan(0, 4));
+        Check("followup: a short session with remembered hardware is re-scanned", MainWindow.NeedsFollowupScan(2, 4));
+        Check("followup: extra hardware needs no follow-up scan", !MainWindow.NeedsFollowupScan(5, 4));
+        Check("followup: nothing remembered means nothing is missing", !MainWindow.NeedsFollowupScan(0, 0));
+
+        // ---- 43. round 20: the OS signals a real window receives ----
+        // The managed PowerModeChanged event was reproduced as NOT firing on Windows 11, so the
+        // notifications are decoded from the raw message parameters instead. If this mapping is
+        // wrong the machine never repairs after a wake-up, which is the whole bug.
+        Check("power: resume-automatic (0x12) is a resume",
+              Setup.PowerMonitor.DecodePowerEvent(0x12) == Setup.PowerEvent.Resume);
+        Check("power: resume-suspend (0x07) is a resume",
+              Setup.PowerMonitor.DecodePowerEvent(0x07) == Setup.PowerEvent.Resume);
+        Check("power: resume-critical (0x06) is a resume",
+              Setup.PowerMonitor.DecodePowerEvent(0x06) == Setup.PowerEvent.Resume);
+        Check("power: suspend (0x04) is a suspend",
+              Setup.PowerMonitor.DecodePowerEvent(0x04) == Setup.PowerEvent.Suspend);
+        Check("power: an unknown broadcast is ignored",
+              Setup.PowerMonitor.DecodePowerEvent(0x99) == Setup.PowerEvent.None);
+        Check("power: an accepted back-off is not a resume",
+              Setup.PowerMonitor.DecodePowerEvent(0x00000012 + 1) == Setup.PowerEvent.None);
+        Check("session: lock/unlock are decoded",
+              Setup.PowerMonitor.DecodeSessionEvent(0x7) == Setup.SessionEvent.Lock &&
+              Setup.PowerMonitor.DecodeSessionEvent(0x8) == Setup.SessionEvent.Unlock);
+        Check("session: logon/logoff are decoded",
+              Setup.PowerMonitor.DecodeSessionEvent(0x5) == Setup.SessionEvent.Logoff &&
+              Setup.PowerMonitor.DecodeSessionEvent(0x6) == Setup.SessionEvent.Logon);
+        Check("session: console connect/disconnect are decoded",
+              Setup.PowerMonitor.DecodeSessionEvent(0x1) == Setup.SessionEvent.ConsoleConnect &&
+              Setup.PowerMonitor.DecodeSessionEvent(0x2) == Setup.SessionEvent.ConsoleDisconnect);
+        Check("session: an unrelated session message is ignored",
+              Setup.PowerMonitor.DecodeSessionEvent(0x0F) == Setup.SessionEvent.None);
+        Check("session: this process has a session id", Setup.PowerMonitor.CurrentSessionId() >= 0);
+
+        // ---- 44. round 20: the frame watchdog's verdicts (the "dark after a wake-up" fix) ----
+        // The signal that matters is NOT "the engine answers" (a post-suspend engine answers
+        // happily while driving nothing) but "the engine's stored colours are still moving".
+        static Setup.EngineShadow.DeviceShadow DevShadow(string name, int leds, int zoneLeds, long sum)
+        {
+            var d = new Setup.EngineShadow.DeviceShadow { Name = name, LedCount = leds, ColourSum = sum };
+            d.ZoneLeds.Add(zoneLeds);
+            return d;
+        }
+        static Setup.EngineShadow.Snapshot Snap(params Setup.EngineShadow.DeviceShadow[] devs)
+        {
+            var s = new Setup.EngineShadow.Snapshot { EngineReachable = true, ClientConnections = 5 };
+            s.Devices.AddRange(devs);
+            return s;
+        }
+
+        var healthy = Snap(DevShadow("Aura", 481, 481, 1000));
+        var frozen = Snap(DevShadow("Aura", 481, 481, 1000));
+        var moved = Snap(DevShadow("Aura", 481, 481, 4444));
+        var zeroZones = Snap(DevShadow("Aura", 481, 0, 0));
+        var noDevices = Snap();
+
+        Check("watchdog: motion is detected", Setup.EngineShadow.AnyMotion(healthy, moved, new HashSet<string> { "Aura" }));
+        Check("watchdog: a frozen sequence reports no motion",
+              !Setup.EngineShadow.AnyMotion(healthy, frozen, new HashSet<string> { "Aura" }));
+        Check("watchdog: a static effect is never called a stall",
+              !Setup.EngineShadow.AnyMotion(healthy, frozen, new HashSet<string>()));
+
+        Check("watchdog: a healthy session is left alone",
+              Setup.EngineShadow.Decide(moved, healthy, true, 300, 0, 0) == Setup.EngineShadow.Verdict.Ok);
+        Check("watchdog: the grace period suppresses a verdict",
+              Setup.EngineShadow.Decide(noDevices, null, true, 3, 5, 9) == Setup.EngineShadow.Verdict.Wait);
+        Check("watchdog: stopped effects are never repaired",
+              Setup.EngineShadow.Decide(noDevices, null, false, 300, 5, 9) == Setup.EngineShadow.Verdict.Wait);
+        Check("watchdog: a dead port is repaired at once",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { PortListening = false },
+                                        healthy, true, 300, 0, 0) == Setup.EngineShadow.Verdict.Repair);
+        Check("watchdog: an unreadable TCP table makes no claim",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { TcpTableReadable = false },
+                                        healthy, true, 300, 5, 5) == Setup.EngineShadow.Verdict.Wait);
+        // The app's own writer sockets matter: the port listening with only our probe attached is
+        // the "the session lost its engine" state.
+        Check("watchdog: a port with nobody attached is repaired",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { EngineReachable = true, ClientConnections = 1 },
+                                        healthy, true, 300, 2, 0) == Setup.EngineShadow.Verdict.Repair);
+        Check("watchdog: a lone probe connection alone is not enough to act",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { EngineReachable = true, ClientConnections = 1 },
+                                        healthy, true, 300, 1, 0) == Setup.EngineShadow.Verdict.Wait);
+        Check("watchdog: zero-LED zones are rebuilt, not restarted",
+              Setup.EngineShadow.Decide(zeroZones, zeroZones, true, 300, 2, 5) == Setup.EngineShadow.Verdict.Rebuild);
+        Check("watchdog: a stalled frame stream is repaired after two strikes",
+              Setup.EngineShadow.Decide(healthy, healthy, true, 300, 2, 0) == Setup.EngineShadow.Verdict.Repair);
+        Check("watchdog: ONE strike only waits (a fluke never restarts the engine)",
+              Setup.EngineShadow.Decide(healthy, healthy, true, 300, 1, 0) == Setup.EngineShadow.Verdict.Ok);
+        Check("watchdog: an engine that accepts TCP but never answers is repaired",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { EngineReachable = false },
+                                        healthy, true, 300, 2, 0) == Setup.EngineShadow.Verdict.Repair);
+        Check("watchdog: a single silent answer is not enough to act",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { EngineReachable = false },
+                                        healthy, true, 300, 1, 0) == Setup.EngineShadow.Verdict.Wait);
+        Check("watchdog: no devices at all is not a stall (nothing to paint)",
+              Setup.EngineShadow.Decide(noDevices, noDevices, true, 300, 2, 0) == Setup.EngineShadow.Verdict.Wait);
+        Check("watchdog: zones stuck at the pre-expand size are rebuilt",
+              Setup.EngineShadow.Decide(healthy, healthy, true, 300, 0, 4) == Setup.EngineShadow.Verdict.Rebuild);
+
+        // A snapshot must describe hardware, not a paint: same devices, different colours, same shape.
+        Check("watchdog: the shape signature ignores the colours",
+              healthy.Signature == moved.Signature && healthy.Signature != zeroZones.Signature);
+        Check("watchdog: totals add up over devices",
+              Snap(DevShadow("A", 10, 10, 5), DevShadow("B", 20, 20, 7)).LedTotal == 30);
+
+        // ---- 45. round 20: reading the OS TCP table ----
+        // The watchdog must know whether the engine is still LISTENING and how many clients are
+        // attached, from Windows itself. Rows are the Win32 shape (MIB_TCPROW_OWNER_PID); LISTEN is
+        // state 2 and ESTABLISHED is 5 — NOT the /proc hex codes 0A/01, which is why the pure parser
+        // is asserted here instead of being trusted.
+        static Setup.EngineShadow.TcpRow Row(int localPort, int remotePort, int state, int pid = 4242)
+            => new(localPort, remotePort, state, pid);
+
+        var tcpRows = new List<Setup.EngineShadow.TcpRow>
+        {
+            Row(0x1A56, 0, Setup.EngineShadow.StateListen),                       // 6742 listening
+            Row(0x1A56, 0x8B2A, Setup.EngineShadow.StateEstablished),             // two app writers
+            Row(0x1A56, 0x8B2B, Setup.EngineShadow.StateEstablished),
+            Row(0x1A56, 0x8B2C, 6),                                              // TIME_WAIT: already gone
+            Row(0x1A57, 0x8B2D, Setup.EngineShadow.StateEstablished),             // a different port
+        };
+        var facts = Setup.EngineShadow.ParseRows(tcpRows, 0x1A56);
+        Check("tcp: the listening socket is found", facts is not null && facts.Value.Listening);
+        Check("tcp: only connections of THIS port are counted", facts is not null && facts.Value.Clients == 2);
+        Check("tcp: a time-wait row is not a live connection", facts is not null && facts.Value.Clients == 2);
+        Check("tcp: another port is not mistaken for the engine's",
+              Setup.EngineShadow.ParseRows(tcpRows, 0x1A60) is { Listening: false, Clients: 0 });
+        Check("tcp: no table at all is a miss", Setup.EngineShadow.ParseRows(null, 6742) is null);
+        Check("tcp: an empty table is a miss",
+              Setup.EngineShadow.ParseRows(new List<Setup.EngineShadow.TcpRow>(), 6742) is { Listening: false });
+        Check("tcp: 6742 decimal is found from its hex form",
+              Setup.EngineShadow.ParseRows(tcpRows, 6742) is { Listening: true, Clients: 2 });
+        // The port sits in the LOW 16 bits of its DWORD in network byte order: 6742 is 0x1A56, so
+        // Windows stores the DWORD as 0x0000561A. Getting this byte-swap wrong would make the
+        // watchdog read a nonsense port and either never fire or fire constantly.
+        Check("tcp: the port is decoded from the packed address",
+              Setup.EngineShadow.NetworkPort(0x561A) == 6742 &&
+              Setup.EngineShadow.NetworkPort(0x0000) == 0 &&
+              Setup.EngineShadow.NetworkPort(0x1A56) == 0x561A);
+        // The engine's OWN listening row must never be counted as a client, or a dead session would
+        // look healthy forever: after a suspend the listener is the only row left.
+        var onlyListener = new List<Setup.EngineShadow.TcpRow> { Row(0x1A56, 0, Setup.EngineShadow.StateListen) };
+        Check("tcp: a listener with no clients has zero clients",
+              Setup.EngineShadow.ParseRows(onlyListener, 6742) is { Listening: true, Clients: 0 });
 
         Console.WriteLine(failed == 0 ? "\nALL RENDER TESTS PASSED" : $"\n{failed} TEST(S) FAILED");
         return failed == 0 ? 0 : 1;

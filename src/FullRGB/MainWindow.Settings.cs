@@ -25,6 +25,7 @@ public partial class MainWindow
     {
         bool running = _engine?.IsRunning == true;
         StopBtn.Content = running ? L10n.T("btn.stopEffects") : L10n.T("btn.startEffects");
+        SyncPowerButton();
     }
 
     private void SaveProfile_Click(object sender, RoutedEventArgs e)
@@ -64,10 +65,57 @@ public partial class MainWindow
     private void Rescan_Click(object sender, RoutedEventArgs e) => _ = RescanAsync();
 
     private bool _rescanning;
+    /// <summary>Set when the user clicks Rescan while a wake-up repair owns the session; drained
+    /// when that repair finishes instead of swallowing the click (round 19).</summary>
+    private bool _rescanQueued;
+    private bool _autoRescanScheduled;
+
+    /// <summary>A session that sees FEWER devices than the cache remembers still needs one more
+    /// rescan — the missing hardware is probably still enumerating (pure; --rendertest §42).</summary>
+    internal static bool NeedsFollowupScan(int present, int remembered) => remembered > present;
+
+    /// <summary>
+    /// ONE automatic rescan, ~6 s after a connect that came up short of the remembered inventory.
+    /// This is what removes the "press Rescan by hand after boot/wake" step: the splash stability
+    /// loop and the wake-up repair can both legitimately conclude while USB enumeration is still
+    /// finishing (or accept a stable-but-partial list), and until now nothing ever looked again.
+    /// </summary>
+    private void ScheduleAutoRescanIfNeeded()
+    {
+        if (_resuming || _autoRescanScheduled || _reallyExiting) return;
+        if (!NeedsFollowupScan(_client?.Controllers.Count ?? 0, App.DeviceCache?.Devices.Count ?? 0)) return;
+        _autoRescanScheduled = true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(6));
+                if (_reallyExiting || _osShuttingDown) return;
+                Dispatcher.BeginInvoke(async () =>
+                {
+                    try
+                    {
+                        // A repair or the user's own rescan owns the session: theirs already
+                        // re-detects, and a concurrent one would fight for the SDK session.
+                        if (_resuming || _rescanning || _reallyExiting) return;
+                        await RescanAsync();
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+            finally { _autoRescanScheduled = false; }
+        });
+    }
 
     private async Task RescanAsync()
     {
         if (_rescanning) return; // StatusPill Border still raises clicks when IsEnabled=false
+        // A wake-up repair is already doing exactly this (and replacing the engine process), so a
+        // concurrent rescan would only fight it for the SDK session — but do NOT swallow the
+        // click: the user pressing Rescan during a repair is exactly the wake scenario, so queue
+        // it and run it the moment the repair releases the session.
+        if (_resuming) { _rescanQueued = true; return; }
         _rescanning = true;
         StatusPill.IsEnabled = false;
         StatusPill.IsHitTestVisible = false;
@@ -83,7 +131,8 @@ public partial class MainWindow
                 _client!.Reconnect();
                 _client.ExpandAllZones(default, (d, z) => profile.ZoneSize(d, z));
             });
-            profile.PruneTo(_client.Controllers);
+            profile.PruneTo(_client.Controllers, App.DeviceCache?.KnownKeys());
+            App.RememberDevices(_client.Controllers);
             BuildDeviceList();
             BuildDevicePicker();
             RefreshStatus();
@@ -111,6 +160,7 @@ public partial class MainWindow
         MinimizedChk.IsChecked = App.Settings.StartMinimized;
         AutoFxChk.IsChecked = App.Settings.AutoStartEffects;
         CloseEngineChk.IsChecked = App.Settings.CloseEngineOnExit;
+        AutoRecoverChk.IsChecked = App.Settings.AutoRecoverLighting;
         SchedChk.IsChecked = App.Settings.SchedulerEnabled;
         BuildSchedMinutes();
         FgChk.IsChecked = App.Settings.ForegroundEnabled;
@@ -141,6 +191,9 @@ public partial class MainWindow
         LoadProfileToUi();
         BuildDeviceList();
         BuildEffectEditor();
+        // The page-heading picker is the quick profile control: it must follow the switch or it
+        // keeps advertising the profile the user just left.
+        if (ProfileQuickBtn is not null) ProfileQuickBtn.Content = CurrentProfile().Name;
         ProfileStore.Save(App.Settings);
         SyncRunButtons();
     }
@@ -479,6 +532,18 @@ public partial class MainWindow
     {
         if (_loadingUi) return;
         App.Settings.CloseEngineOnExit = CloseEngineChk.IsChecked == true;
+        ProfileStore.Save(App.Settings);
+    }
+
+    /// <summary>
+    /// Turns the independent frame watchdog's automatic repair on or off. It is what removes the
+    /// "press Rescan after every wake-up" step, so it is on by default; off is for a user who
+    /// prefers to decide when the engine may be restarted.
+    /// </summary>
+    private void AutoRecover_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.AutoRecoverLighting = AutoRecoverChk.IsChecked == true;
         ProfileStore.Save(App.Settings);
     }
 

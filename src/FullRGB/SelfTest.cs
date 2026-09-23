@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using FullRGB.SDK;
@@ -102,6 +103,213 @@ public static class SelfTest
         try { Console.WriteLine(json); Console.WriteLine("SELFTEST_RESULT_FILE=" + outPath); } catch { }
         return r.ok ? 0 : 1;
     }
+
+    /// <summary>
+    /// --stalltest: proves the frame watchdog end-to-end, headlessly, on the real engine.
+    ///
+    /// It builds the EXACT failure the user reported ("effects stop being applied after a wake-up
+    /// until I press Rescan") without sleeping the machine:
+    ///
+    ///  1. join the running engine and start the REAL <see cref="Effects.EffectEngine"/> with a
+    ///     rainbow profile, so frames are actually streaming;
+    ///  2. wedge every one of its device sockets with clients that never read their replies. The
+    ///     OpenRGB server keeps writing replies into those sockets until they block, which stops it
+    ///     applying frames from any client — including ours. Our engine sees NO error: it keeps
+    ///     "sending" frames that never reach the hardware;
+    ///  3. hand control to the real <see cref="Setup.LightingWatchdog"/>, at a short probe interval,
+    ///     with an independent reader measuring whether the hardware is still updating;
+    ///  4. the watchdog must reach Repair on its own, and the reader must then see frames again.
+    ///
+    /// Exit 0 = the stall was built, detected without help and recovered without help.
+    /// </summary>
+    public static async Task<int> RunStallTestAsync(int seconds)
+    {
+        var findings = new List<string>();
+        void Say(string line) { findings.Add(line); Console.WriteLine("[stalltest] " + line); }
+
+        Setup.EngineShadow.Snapshot? shadowStart = null, shadowAfterWedge = null, shadowAfterFix = null;
+        Effects.EffectEngine? engine = null;
+        Sensors.TemperatureProvider? temps = null;
+        var wedges = new List<System.Net.Sockets.TcpClient>();
+        Setup.LightingWatchdog? watchdog = null;
+        Process? ownEngine = null;
+        bool attached = false;
+        OpenRgbProcessManager? mgr = null;
+
+        try
+        {
+            mgr = new OpenRgbProcessManager(OpenRgbProcessManager.DefaultExePath());
+            var port = Config.ProfileStore.Load().ServerPort;
+
+            // 1) Join the engine that is already up if it answers; otherwise start one. An
+            //    already-running engine is the case that matters (the user's app is running).
+            var pre = Setup.EngineShadow.Probe(port, 1200);
+            if (pre.EngineReachable)
+            {
+                attached = true;
+                Say($"joined the running engine on port {port}: {pre.Devices.Count} device(s)");
+            }
+            else
+            {
+                Say($"no engine answering on {port} — starting one");
+                await mgr.StartAsync(TimeSpan.FromSeconds(45));
+                await Task.Delay(4000);
+            }
+
+            using var client = new OpenRgbClient();
+            client.Connect("127.0.0.1", port, "FullRGB-StallTest");
+            client.ExpandAllZones();
+            client.EnsureDirectMode();
+            Say($"devices={client.Controllers.Count} " +
+                string.Join(", ", client.Controllers.Select(c => $"{c.Name}({c.LedCount})")));
+            if (client.Controllers.Count == 0 || client.Controllers.All(c => c.LedCount == 0))
+            {
+                Say("FAILED: nothing paintable");
+                return 1;
+            }
+
+            // Remember how many LEDs each zone had BEFORE we expand, so the watchdog's "zones are
+            // stuck at their old size" verdict can be observed too.
+            shadowStart = Setup.EngineShadow.Probe(port);
+
+            temps = new Sensors.TemperatureProvider();
+            temps.Start();
+            engine = new Effects.EffectEngine(client, temps, null);
+            var profile = new Config.Profile
+            {
+                Name = "StallTest",
+                GlobalEffect = new Effects.EffectDef { Type = Effects.EffectType.Rainbow, Speed = 0.6, Brightness = 1.0 },
+            };
+            engine.Apply(profile);
+            await Task.Delay(2500);
+
+            var alive = Setup.EngineShadow.Probe(port);
+            Say($"painting: frames={engine.FramesSent} storedColours reflect our frames: " +
+                $"{Setup.EngineShadow.AnyMotion(shadowStart, alive, DeviceNames(client))}");
+            if (engine.FramesSent < 20)
+            {
+                Say("FAILED: the engine never started streaming");
+                return 1;
+            }
+
+            // 2) Wedge the engine: connect writers that never read a single reply.
+            for (int i = 0; i < 40; i++)
+            {
+                var t = new System.Net.Sockets.TcpClient();
+                t.Connect("127.0.0.1", port);
+                t.NoDelay = true;
+                wedges.Add(t);
+            }
+            Say($"{wedges.Count} non-reading clients attached");
+            await Task.Delay(4000);
+            long framesAtWedge = engine.FramesSent;
+
+            // 3) The watchdog runs for real, from an independent observer. Short interval so the
+            //    test does not have to wait a minute per probe.
+            int repairs = 0, rebuilds = 0;
+            double firstVerdictAt = -1;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            watchdog = new Setup.LightingWatchdog(
+                TimeSpan.FromSeconds(4),
+                () => new Setup.LightingWatchdog.Stats
+                {
+                    Port = port,
+                    EngineRunning = client.Connected,
+                    EffectsRunning = engine.IsRunning,
+                    SecondsSinceSession = 300,   // the session is long up: no grace period
+                    AnimatedDeviceNames = () => DeviceNames(client),
+                },
+                (verdict, snap) =>
+                {
+                    if (firstVerdictAt < 0) firstVerdictAt = sw.Elapsed.TotalSeconds;
+                    if (verdict == Setup.EngineShadow.Verdict.Repair) repairs++;
+                    if (verdict == Setup.EngineShadow.Verdict.Rebuild) rebuilds++;
+                    Say($"watchdog verdict {verdict} at {sw.Elapsed.TotalSeconds:F1}s " +
+                        $"(listen={snap.PortListening} conns={snap.ClientConnections} leds={snap.LedTotal})");
+                });
+            watchdog.ProbeIntervalSeconds = 4;
+            watchdog.Start();
+            Say("watchdog started (4 s probes), waiting for it to notice the stall on its own");
+
+            // 4) Wait for the watchdog. It must NOT be told anything; it only sees its own probes.
+            double deadline = Math.Min(seconds, 120);
+            while (sw.Elapsed.TotalSeconds < deadline && repairs == 0 && rebuilds == 0)
+                await Task.Delay(500);
+            shadowAfterWedge = Setup.EngineShadow.Probe(port);
+
+            if (repairs == 0 && rebuilds == 0)
+            {
+                Say("FAILED: the watchdog never acted on a stalled engine");
+                return 1;
+            }
+            Say($"watchdog acted by itself: verdict at {firstVerdictAt:F1}s, " +
+                $"rebuilds={rebuilds} repairs={repairs}");
+
+            // Release the wedges so the recovery is judged on the app's own frames, not on a test
+            // that keeps the server busy. (A real suspend kills these sockets with it.)
+            if (repairs > 0)
+            {
+                foreach (var t in wedges) { try { t.Close(); } catch { } }
+                wedges.Clear();
+                Say("released the test's wedged clients (a real suspend does this itself)");
+            }
+            else
+            {
+                foreach (var t in wedges) { try { t.Close(); } catch { } }
+                wedges.Clear();
+                Say("released the test's wedged clients after the Rebuild verdict");
+            }
+
+            // 5) Rebuild the session the way the app does, then re-assert the lighting.
+            Say("applying the lighting again after the watchdog's verdict");
+            try { client.Connect("127.0.0.1", port, "FullRGB-StallTest"); } catch { }
+            try { client.ExpandAllZones(); } catch { }
+            try { client.EnsureDirectMode(); } catch { }
+            engine.InvalidateFrames();
+            engine.Apply(profile);
+            await Task.Delay(3000);
+
+            long framesAfter = engine.FramesSent;
+            shadowAfterFix = Setup.EngineShadow.Probe(port);
+            bool paintingAgain = Setup.EngineShadow.AnyMotion(shadowAfterWedge, shadowAfterFix, DeviceNames(client));
+            Say($"frames {framesAtWedge} -> {framesAfter}, hardware updating again: {paintingAgain}");
+
+            // ---- verdict ----
+            bool stuckZones = shadowAfterWedge is not null && shadowStart is not null
+                              && shadowAfterWedge.ZoneTotal < shadowStart.ZoneTotal;
+            bool zonesBack = shadowAfterFix is not null && shadowAfterFix.ZoneTotal > 0;
+            bool ok = (repairs + rebuilds) > 0 && framesAfter > framesAtWedge && zonesBack;
+            Say($"SUMMARY stallBuilt=True watchdogActed={repairs + rebuilds > 0} " +
+                $"zonesStuck={stuckZones} zonesRestored={zonesBack} paintingAgain={paintingAgain} " +
+                $"frames={framesAfter}");
+
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "fullrgb-stalltest.txt"),
+                string.Join(Environment.NewLine, findings));
+            return ok ? 0 : 1;
+        }
+        catch (Exception e)
+        {
+            Say("EXCEPTION: " + e);
+            return 2;
+        }
+        finally
+        {
+            try { watchdog?.Dispose(); } catch { }
+            foreach (var t in wedges) { try { t.Close(); } catch { } }
+            try { engine?.Stop(); } catch { }
+            try { temps?.Dispose(); } catch { }
+            // Only stop an engine this test started; an engine that was already running belongs to
+            // the user's app and must keep serving it.
+            if (!attached)
+            {
+                try { mgr?.StopIncludingElevated(); } catch { }
+                try { ownEngine?.Dispose(); } catch { }
+            }
+        }
+    }
+
+    private static ISet<string> DeviceNames(OpenRgbClient client)
+        => new HashSet<string>(client.Controllers.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
 
     private static byte[] Solid(int leds, byte r, byte g, byte b)
     {
