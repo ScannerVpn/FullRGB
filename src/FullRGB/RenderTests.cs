@@ -249,10 +249,13 @@ public static class RenderTests
                 CustomPixels = "#FF0000,#00FF00", AudioBand = "level",
             };
             // A context with real audio/sensor values, so AudioVU and Temperature actually paint.
+            // GameHasHealth=0.4 so GamePulse paints its danger↔healthy blend: with NO health the
+            // renderer idles on the healthy colour only, ColorHex would not reach the frame, and
+            // the predicate-vs-renderer check would false-fail (only GamePulse reads these fields).
             var colCtx = new Effects.EffectContext
             {
                 Time = 0.25, AudioLevel = 0.8, AudioBass = 0.8, AudioMid = 0.8, AudioTreble = 0.8,
-                CpuTemp = 55, GpuTemp = 55,
+                CpuTemp = 55, GpuTemp = 55, GameHasHealth = true, GameHealth = 0.4,
             };
             var f1 = Effects.EffectRenderer.Render(withRed, 40, 0, colCtx);
             var f2 = Effects.EffectRenderer.Render(withGreen, 40, 0, colCtx);
