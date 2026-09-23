@@ -3,7 +3,7 @@
 All notable changes to FullRGB are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semver.
 
-## [Unreleased] — audit fixes: documented guarantees vs. real code
+## [1.6.1] — 2026-09-23 — Round 22: the Hardware-tab crash, and docs that matched the code
 
 ### Fixed — crash
 
