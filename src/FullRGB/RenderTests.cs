@@ -1053,6 +1053,7 @@ public static class RenderTests
 
         // ---- 48b. round 21: the GamePulse effect renders in every state without throwing ----
         Sensors.GameEventState.Reset();               // true idle: no events at all
+        Sensors.GameEventState.Fill(gameCtx);         // re-Fill: gameCtx still carried the death hold from 48
         var gp = new Effects.EffectDef
         {
             Type = Effects.EffectType.GamePulse, ColorHex = "#FF2222", Color2Hex = "#22FF66",

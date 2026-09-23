@@ -53,10 +53,10 @@ jobs:
           $exe = "src/FullRGB/bin/Debug/net8.0-windows/win-x64/FullRGB.exe"
           foreach ($mode in @('--rendertest', '--uitest')) {
             $out = "$env:RUNNER_TEMP\$($mode.Trim('-')).txt"
+            $err = "$env:RUNNER_TEMP\$($mode.Trim('-')).err.txt"
             $p = Start-Process -FilePath $exe -ArgumentList $mode `
-                   -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
+                   -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
             if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {}; throw "gate timed out: $mode" }
-            if ($p.ExitCode -ne 0) { throw "gate exit code $($p.ExitCode): $mode" }
             # A GUI-subsystem exe inherits the console code page for redirected stdout, which
             # differs per machine (UTF-16LE here UTF-8 there): detect it from NUL density
             # instead of assuming one encoding. A fixed -Encoding breaks one side or the other.
@@ -67,7 +67,12 @@ jobs:
             } else {
               $text = [System.Text.Encoding]::UTF8.GetString($bytes)
             }
+            # PRINT FIRST, judge after: the test's own output is the only diagnostic we get
+            # when a gate fails, so it must reach the log even (especially) on a red run.
             Write-Host $text
+            $errText = [System.IO.File]::ReadAllText($err)
+            if ($errText.Trim().Length -gt 0) { Write-Host "STDERR:"; Write-Host $errText }
+            if ($p.ExitCode -ne 0) { throw "gate exit code $($p.ExitCode): $mode" }
             $want = if ($mode -eq '--rendertest') { 'ALL RENDER TESTS PASSED' } else { 'ALL UI TESTS PASSED' }
             if ($text -notmatch [regex]::Escape($want)) { throw "gate failed: $mode (missing '$want')" }
             # veto real failures only: a bare 'FAIL' substring also matches test NAMES
