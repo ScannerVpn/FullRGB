@@ -11,7 +11,9 @@ public sealed class ScheduleRule
     public string End { get; set; } = "00:00";
     /// <summary>Profile to activate while the rule matches.</summary>
     public string Profile { get; set; } = "";
-    /// <summary>Active weekdays. Empty = every day. Values: Mo Tu We Th Fr Sa Su.</summary>
+    /// <summary>Active weekdays. Empty = every day. Values: Mo Tu We Th Fr Sa Su.
+    /// For an overnight range the day names refer to the night the range STARTS on, not the
+    /// calendar day of the moment being tested — see <see cref="Matches"/>.</summary>
     public HashSet<DayOfWeek> Days { get; set; } = new();
 
     public bool IsOvernight => StartMinutes() > EndMinutes();
@@ -19,13 +21,31 @@ public sealed class ScheduleRule
     public int StartMinutes() => ParseHm(Start);
     public int EndMinutes() => ParseHm(End);
 
-    /// <summary>Does this rule match the given local moment? Pure; unit-tested.</summary>
+    /// <summary>
+    /// Does this rule match the given local moment? Pure; unit-tested.
+    ///
+    /// Overnight ranges are anchored to the day they STARTED on: "Sa 22:00-07:00" means
+    /// Saturday 22:00 → Sunday 07:00, so 00:30 on SUNDAY is still Saturday's night. Testing the
+    /// weekday of the current moment instead would make that rule fire early on Saturday morning
+    /// (the tail of Friday night) and make "Fr 22:00-07:00" lose its Saturday morning half.
+    /// So on the morning half (t &lt; end) the weekday is checked against YESTERDAY.
+    /// </summary>
     public bool Matches(DateTime local)
     {
-        if (Days.Count > 0 && !Days.Contains(local.DayOfWeek)) return false;
         int t = local.Hour * 60 + local.Minute;
         int s = StartMinutes(), e = EndMinutes();
-        if (IsOvernight) return t >= s || t < e;
+
+        if (IsOvernight)
+        {
+            if (Days.Count > 0)
+            {
+                var startDay = t < e ? local.Date.AddDays(-1).DayOfWeek : local.DayOfWeek;
+                if (!Days.Contains(startDay)) return false;
+            }
+            return t >= s || t < e;
+        }
+
+        if (Days.Count > 0 && !Days.Contains(local.DayOfWeek)) return false;
         // equal start/end = the whole day (a degenerate "22:00-22:00" should not be dead)
         if (s == e) return true;
         return t >= s && t < e;
@@ -86,6 +106,10 @@ public sealed class ScheduleRule
 /// One rule per line: <c>[Days ]hh:mm-hh:mm=ProfileName</c>. Days may be a range
 /// (<c>Mo-Fr</c>) or a list (<c>Sa,Su</c>); blank = every day. <c>#</c> lines are comments.
 /// The FIRST matching rule wins, so more specific rules belong on top.
+///
+/// A range whose end is BEFORE its start wraps midnight (<c>22:00-07:00</c>). For those, the
+/// day names describe the night the range STARTS on: <c>Sa 22:00-07:00=Night</c> runs from
+/// Saturday 22:00 until Sunday 07:00 — i.e. "Saturday night".
 /// </summary>
 public static class ScheduleRules
 {

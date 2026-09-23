@@ -123,7 +123,9 @@ docs/community items. Code-complete in this tree; compile-verified 2026-09-23 (R
 ### Known limitations to state, not fix silently
 
 - The companion page has no QR code (a QR encoder would need a dependency; the URL+PIN is
-  copyable instead). mDNS discovery is likewise not included — the Settings card lists the LAN URLs.
+  copyable instead). **Reassessed in round 22:** a minimal QR encoder is ~200 lines of pure
+  C# that emits SVG paths — no dependency needed — so this is worth doing next round for the
+  phone-pairing flow. mDNS discovery is likewise not included — the Settings card lists the LAN URLs.
 - Community protocols paint solid colours only (one report), and are not wired into the
   EffectEngine loop yet — deliberate: many OEM firmwares only accept slow polled writes, and
   streaming to them without capacity probing would repeat the Commander Core stall story.
@@ -132,7 +134,39 @@ docs/community items. Code-complete in this tree; compile-verified 2026-09-23 (R
 
 ---
 
+## Round 22 (2026-09-23) — audit fixes: documented guarantees vs. real code
+
+Seven issues where the code did not match what it (or the UI) promised, plus two low-priority
+hardening items. All are fixed; `--rendertest` and `--uitest` pass with new regression tests.
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | `TestPaintCommunity` asked ONE confirm dialog while `HidProtocolFile`'s safety model, `hid.writeTip` and `hid.explain` all promised "twice every time, one requiring typing" | Second confirmation is now a typed one: the device's `VID:PID` must be entered before every paint (`hid.paintWarn2`) |
+| 2 | `ProfileShare.ImportCode` ran `GZipStream.CopyTo` with no ceiling — a ~6 KB pasted code inflates to gigabytes (one-line DoS on "Import share code") | Bounded copy: refuses past 4 MB inflated (regression test proves a 6 KB code → 6 MB payload is rejected) |
+| 3 | `ScheduleRule.Matches` tested weekdays against the *current* moment, so `Sa 22:00-07:00` fired during Saturday's small hours (Friday's night) and `Fr 22:00-07:00` lost its Saturday-morning half | An overnight range is anchored to the night it STARTED on: on the morning half the weekday is checked against *yesterday*. Documented in the parser comment, `ts.hint` (en+fa) |
+| 4 | `GameEventState`'s comment promised "volatile fields / Interlocked, never locks" but every member was a plain auto-property | Real lock-free backing fields: `Volatile` for the longs/string/bool, `Interlocked` on the bit pattern for the doubles (which also removes torn reads on 32-bit). Public API unchanged |
+| 5 | `ControlHub`: `==` on the API token and PIN; unused `loopback` parameter; unbounded `Task.Run` per connection | `CryptographicOperations.FixedTimeEquals` for both; the dead parameter is gone; a `SemaphoreSlim(16)` caps concurrent connections so a LAN peer cannot hold sockets open and starve the pool |
+| 6 | `AppUpdater.CleanupStale` deleted `FullRGB.exe.old` on the very next start, so a build that crashed on launch had no rollback path | `rollback.json` marker counts crash-free starts; `.old` survives until `RequiredHealthyStarts` (2) clean sessions (`NoteHealthyStart()` is called once the engine session is live) |
+| 7 | `CommunityStore.Remove` built a path straight from a string | `IsSafeStoreName` guard (no separators, no `..`, no rooted path, must round-trip through `GetFileName`) |
+| 8 | `/api/status` returned the dispatcher's raw text as JSON; throttling existed only on `/api/auth` | `JsonOrError` validates with `JsonDocument.Parse` first; the rate limit now covers every route (40 req/s), which also protects the UI thread from a dispatcher flood |
+| 9 | `FindCollection` silently fell back to the first collection of a VID:PID | The fallback is reported: a log line for probes, a stronger dialog wording (`hid.paintWarnFallback`) for writes |
+| 10 | **Clicking the Hardware tab crashed the app** (found by the user after the first dist36 build). `HidBridge` declared `HidD_GetCaps`, which exists in no Windows DLL — the HID parser routine is `HidP_GetCaps` and returns NTSTATUS, not BOOL. Same struct also had `Usage`/`UsagePage` swapped and only 4 of the 17 reserved ushorts, so the native call would have written past the managed buffer | Correct `HidP_GetCaps` + `HIDP_STATUS_SUCCESS`, corrected field order, full `Reserved[17]` (managed size now exactly 64 bytes). Two new build-gate checks: every `[DllImport]` entry point must resolve, and `HIDP_CAPS` must be 64 bytes |
+| 11 | A failing page build reached the WPF dispatcher and terminated the process | `Tab_Changed` wraps `BuildHardwarePage()`; `BuildCommunityHidCard` wraps the HID enumeration. Both degrade to an inline error row |
+| 12 | COMPATIBILITY.md credited the vendor HID channel (`usagePage 0xFF01`, 8-byte feature report) to the CASUE **keyboard** | Measured with `HidP_GetCaps`: the channel belongs to the **mouse** (`30FA:1140`). The keyboard exposes only standard collections with no feature report, so no protocol file can address it. Table corrected, and `_probe`-measured collection lists recorded |
+
+Still open (deliberately, they are release-process work, not code fixes):
+
+- **Authenticode code-signing of the released exe.** The update hash is self-referential, so it
+  cannot prove a release came from us — only that the file did not change between download and
+  apply. Signing is the real fix; documented in README → Security notes.
+- **Automatic rollback.** `.old` is now preserved, but reverting is still manual (rename it back).
+  A full version would health-check the new build and restore `.old` automatically.
+- **QR code for companion pairing** — see the reassessment above; no dependency needed.
+
+---
+
 ## 10c. Round 15 (2026-09-11) — v1.4.0: arena UI redesign
+
 
 The React mock-up in `_arena-src/` (reviewed 2026-09-10, see the session memory) was ported into
 the WPF UI and shipped as v1.4.0. Scope of the diff over v1.3.0 (11 files, ~1600 insertions):

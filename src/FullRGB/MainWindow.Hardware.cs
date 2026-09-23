@@ -74,7 +74,19 @@ public partial class MainWindow
         panel.Children.Add(Line(L10n.T("hid.explain"), "Muted"));
 
         var (protocols, errors) = Hid.CommunityStore.Load();
-        var hid = Hid.HidBridge.Enumerate();
+        // A HID enumeration failure must degrade to "no collections found" — the card's buttons
+        // then report "device not present" instead of taking the whole page (and the app) down.
+        List<Hid.HidBridge.HidCollection> hid;
+        try
+        {
+            hid = Hid.HidBridge.Enumerate();
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Exception("community HID enumerate", e);
+            hid = new List<Hid.HidBridge.HidCollection>();
+            panel.Children.Add(Line(L10n.T("hid.enumFailed", e.Message), "Warn"));
+        }
 
         foreach (var proto in protocols)
         {
@@ -219,25 +231,39 @@ public partial class MainWindow
     private static ushort ParsePid(string vidpid)
         => ushort.TryParse((vidpid ?? "").Split(':').Skip(1).FirstOrDefault(), System.Globalization.NumberStyles.HexNumber, null, out var p) ? p : (ushort)0;
 
-    /// <summary>Best HID collection for a protocol: usagePage/usage match first, then any collection of that VID:PID.</summary>
+    /// <summary>
+    /// Best HID collection for a protocol: usagePage/usage match first, then any collection of
+    /// that VID:PID. <paramref name="exact"/> is false when that fallback was used — a composite
+    /// device (keyboard + hub, a mouse with several interfaces) exposes several collections, and
+    /// the report may then land on the wrong one, so the caller must say so out loud.
+    /// </summary>
     private static Hid.HidBridge.HidCollection? FindCollection(Hid.HidProtocolFile proto,
-        List<Hid.HidBridge.HidCollection> hid, int? usagePage = null, int? usage = null)
-        => hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum
-                                   && (usagePage is null || c.UsagePage == usagePage)
-                                   && (usage is null || c.Usage == usage))
-           ?? hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum);
+        List<Hid.HidBridge.HidCollection> hid, int? usagePage, int? usage, out bool exact)
+    {
+        var match = hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum
+                                           && (usagePage is null || c.UsagePage == usagePage)
+                                           && (usage is null || c.Usage == usage));
+        if (match is not null) { exact = true; return match; }
+        exact = false;
+        return hid.FirstOrDefault(c => c.Vid == proto.VidNum && c.Pid == proto.PidNum);
+    }
 
     /// <summary>READ-ONLY probe: one feature report, logged and shown in the status line.</summary>
     private void ProbeCommunityDevice(Hid.HidProtocolFile proto, List<Hid.HidBridge.HidCollection> hid)
     {
         try
         {
-            var col = FindCollection(proto, hid, proto.Probe?.UsagePage, proto.Probe?.Usage);
+            var col = FindCollection(proto, hid, proto.Probe?.UsagePage, proto.Probe?.Usage, out bool exact);
             if (col is null)
             {
                 SetStatus(L10n.T("hid.deviceNotFound", proto.VidPid), StatusKind.Warn);
                 return;
             }
+            // A read from the wrong collection is harmless but tells the author nothing useful,
+            // so log it instead of letting them debug a protocol that was never reached.
+            if (!exact)
+                Diag.AppLog.Warn($"community probe {proto.VidPid}: usagePage/usage did not match — " +
+                                 $"falling back to collection {col.Path}");
             var probe = proto.Probe ?? new Hid.HidProbe { ReportId = 0, Length = 8 };
             var (data, error) = Hid.HidBridge.Probe(col, probe.ReportId, probe.Length);
             if (data is null)
@@ -259,9 +285,11 @@ public partial class MainWindow
 
     /// <summary>
     /// One guarded test paint (solid colour from the current profile). Requires the global
-    /// experimental-write switch AND a fresh double confirmation EVERY click — the device
-    /// firmware is unknown to us, and this is exactly the "guessed SET_FEATURE payload" risk
-    /// the README warns about, offered only to users who know why they want it.
+    /// experimental-write switch AND a fresh double confirmation EVERY click — the second one
+    /// typed out — because the device firmware is unknown to us and this is exactly the
+    /// "guessed SET_FEATURE payload" risk the README warns about, offered only to users who
+    /// know why they want it. The typed step is the safety model documented in
+    /// <see cref="Hid.HidProtocolFile"/>; it must not be softened.
     /// </summary>
     private void TestPaintCommunity(Hid.HidProtocolFile proto, List<Hid.HidBridge.HidCollection> hid, Button owner)
     {
@@ -272,12 +300,26 @@ public partial class MainWindow
                 SetStatus(L10n.T("hid.writeNeeded"), StatusKind.Warn);
                 return;
             }
-            if (!ConfirmDialog.Ask(this, L10n.T("hid.paintWarn", proto.Name), L10n.T("hid.paintContinue"), danger: true))
-                return;
-            var col = FindCollection(proto, hid, proto.Paint?.UsagePage, proto.Paint?.Usage);
+            var col = FindCollection(proto, hid, proto.Paint?.UsagePage, proto.Paint?.Usage, out bool exact);
             if (col is null)
             {
                 SetStatus(L10n.T("hid.deviceNotFound", proto.VidPid), StatusKind.Warn);
+                return;
+            }
+            if (!exact)
+                Diag.AppLog.Warn($"community paint {proto.VidPid}: usagePage/usage did not match — " +
+                                 $"falling back to collection {col.Path}");
+            // Confirmation 1 of 2: the plain yes/no, with a stronger wording when the report is
+            // about to go to a fallback collection rather than the one the protocol named.
+            if (!ConfirmDialog.Ask(this,
+                    L10n.T(exact ? "hid.paintWarn" : "hid.paintWarnFallback", proto.Name),
+                    L10n.T("hid.paintContinue"), danger: true))
+                return;
+            // Confirmation 2 of 2: typed, so it cannot be dismissed by muscle memory.
+            if (PromptDialog.Ask(this, L10n.T("hid.paintWarn2", proto.VidPid), "") is not { } typed
+                || !typed.Trim().Equals(proto.VidPid, StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus(L10n.T("hid.paintCancelled"), StatusKind.Warn);
                 return;
             }
             PushEdit();

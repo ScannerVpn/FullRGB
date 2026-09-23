@@ -35,22 +35,43 @@ public sealed class PendingUpdate
 ///      fixed BEFORE the swap decision, not after).
 ///   3. APPLY — at the NEXT start (ApplyPendingOnStartup runs before anything touches the engine):
 ///      rename the running exe to FullRGB.exe.old (a running exe CAN be renamed on Windows),
-///      move the downloaded file into its place, relaunch, exit. The .old file is cleaned up by
-///      the new instance; stale downloads are pruned every start.
+///      move the downloaded file into its place, relaunch, exit. The .old copy is NOT deleted
+///      immediately: a marker records how many crash-free starts the new build has had, and the
+///      rollback copy survives until that count reaches <see cref="RequiredHealthyStarts"/>.
+///      Stale downloads are pruned every start.
 ///
 /// Security posture: HTTPS only, the owner/repo is a compile-time constant (an attacker cannot
 /// repoint the check without rebuilding), the asset must be named FullRGB.exe, must start with
 /// the MZ PE header and must pass its recorded SHA-256 before being swapped in.
+///
+/// Known limit: that SHA-256 is SELF-referential — it is compared against the hash recorded when
+/// the file was downloaded, so it detects corruption and tampering between download and apply,
+/// but it cannot prove the release itself came from us. A compromised GitHub account could
+/// publish a malicious asset and this check would happily accept it. Real authenticity needs
+/// Authenticode code-signing of the exe (see README → Security).
 /// </summary>
 public static class AppUpdater
 {
     public const string Repo = "ScannerVpn/FullRGB";
     private const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
 
+    /// <summary>Crash-free starts a freshly swapped build must reach before its rollback copy
+    /// (FullRGB.exe.old) is allowed to be deleted.</summary>
+    public const int RequiredHealthyStarts = 2;
+
     public static string UpdateDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                      "FullRGB", "update");
     private static string PendingPath => Path.Combine(UpdateDir, "pending.json");
+
+    /// <summary>Records the rollback copy left by the last swap and how many starts it survived.</summary>
+    private sealed class UpdateHealth
+    {
+        [JsonPropertyName("old")] public string Old { get; set; } = "";
+        [JsonPropertyName("starts")] public int Starts { get; set; }
+    }
+
+    private static string HealthMarkerPath => Path.Combine(UpdateDir, "rollback.json");
 
     private static readonly HttpClient Http = new()
     {
@@ -255,7 +276,10 @@ public static class AppUpdater
             File.Move(exe, old);                 // legal while this process runs it
             File.Move(pending.File, exe, true);  // the new bytes take the old path
             TryDelete(PendingPath);
-            Diag.AppLog.Info($"update {pending.Version} applied — relaunching");
+            // Keep the rollback copy for now — the new build has not proven it can start yet.
+            // CleanupStale honours this marker and NoteHealthyStart() retires it.
+            WriteHealthMarker(new UpdateHealth { Old = old, Starts = 0 });
+            Diag.AppLog.Info($"update {pending.Version} applied — relaunching (rollback kept at {old})");
             return args;
         }
         catch (Exception e)
@@ -266,7 +290,11 @@ public static class AppUpdater
         }
     }
 
-    /// <summary>Deletes FullRGB.exe.old next to the current exe (left by the previous swap).</summary>
+    /// <summary>
+    /// Deletes FullRGB.exe.old next to the current exe — but ONLY once the build that replaced
+    /// it has started cleanly enough times. Removing it on the very next start would leave a
+    /// build that crashes on launch with no way back.
+    /// </summary>
     public static void CleanupStale()
     {
         try
@@ -274,8 +302,13 @@ public static class AppUpdater
             string? exe = Environment.ProcessPath;
             if (!string.IsNullOrEmpty(exe))
             {
-                string old = exe + ".old";
-                if (File.Exists(old)) TryDelete(old);
+                var health = ReadHealthMarker();
+                if (health is null || health.Starts >= RequiredHealthyStarts)
+                {
+                    TryDelete(exe + ".old");
+                    if (health is not null) TryDelete(HealthMarkerPath);
+                }
+                // else: the swap has not proven itself yet — keep .old for rollback.
             }
         }
         catch { }
@@ -286,6 +319,53 @@ public static class AppUpdater
                     // part files and downloads older than 7 days are junk
                     if (f.Extension == ".part" || f.LastWriteTimeUtc < DateTime.UtcNow.AddDays(-7))
                         TryDelete(f.FullName);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Counts one start that got as far as a live engine session. Called from the startup path
+    /// once the session is healthy: a build that crashes before that point never reaches here,
+    /// which is exactly what keeps its rollback copy alive.
+    /// </summary>
+    public static void NoteHealthyStart()
+    {
+        try
+        {
+            var health = ReadHealthMarker();
+            if (health is null) return;                  // no swap to judge
+            health.Starts++;
+            if (health.Starts >= RequiredHealthyStarts)
+            {
+                TryDelete(health.Old);
+                TryDelete(HealthMarkerPath);
+                Diag.AppLog.Info($"update rollback copy retired after {health.Starts} clean starts");
+                return;
+            }
+            WriteHealthMarker(health);
+            Diag.AppLog.Info($"clean start {health.Starts}/{RequiredHealthyStarts} — rollback copy kept");
+        }
+        catch { }
+    }
+
+    private static UpdateHealth? ReadHealthMarker()
+    {
+        try
+        {
+            if (!File.Exists(HealthMarkerPath)) return null;
+            var h = JsonSerializer.Deserialize<UpdateHealth>(File.ReadAllText(HealthMarkerPath));
+            return h is null || h.Old.Length == 0 ? null : h;
+        }
+        catch { return null; }
+    }
+
+    private static void WriteHealthMarker(UpdateHealth h)
+    {
+        try
+        {
+            Directory.CreateDirectory(UpdateDir);
+            File.WriteAllText(HealthMarkerPath,
+                JsonSerializer.Serialize(h, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }

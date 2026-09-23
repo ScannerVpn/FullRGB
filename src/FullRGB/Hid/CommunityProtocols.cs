@@ -17,7 +17,8 @@ namespace FullRGB.Hid;
 ///      1. the file itself sets "experimentalWrite": true (the author takes responsibility),
 ///      2. the user turns on the global switch in Hardware → Community protocols
 ///         (AppSettings.HidExperimentalWrite, persisted),
-///      3. the user double-confirms per test paint (two dialogs, one requiring typing),
+///      3. the user double-confirms per test paint — two dialogs on EVERY click, the second
+///         one requiring the device's VID:PID to be typed out (see MainWindow.TestPaintCommunity),
 ///      4. the payload length is bounded by the file's declared report length (8..64 bytes).
 ///  • Only the endpoints the file declares are ever opened, matched by the device's own
 ///    interface path — no scanning arbitrary devices for writable collections.
@@ -215,11 +216,28 @@ public static class CommunityStore
     {
         try
         {
+            // Defense in depth: callers today pass a name that came from a directory listing,
+            // but Path.Combine happily resolves "..\..\something", so never build a path from
+            // an unvalidated string.
+            if (!IsSafeStoreName(source)) return "invalid protocol file name";
             var path = Path.Combine(Dir, source);
             if (File.Exists(path)) { File.Delete(path); return ""; }
             return "file not found";
         }
         catch (Exception e) { return e.Message; }
+    }
+
+    /// <summary>True when <paramref name="name"/> is a plain file name inside the store:
+    /// no separators, no "..", no rooted path, nothing that escapes <see cref="Dir"/>.</summary>
+    internal static bool IsSafeStoreName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        if (name.Contains("..", StringComparison.Ordinal)) return false;
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
+        if (name.Contains('/') || name.Contains('\\') || name.Contains(':')) return false;
+        if (Path.IsPathRooted(name)) return false;
+        // The final authority: the name must round-trip through GetFileName unchanged.
+        return string.Equals(name, Path.GetFileName(name), StringComparison.Ordinal);
     }
 
     private static string SafeFileName(string s)

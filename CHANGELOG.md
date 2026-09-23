@@ -3,6 +3,59 @@
 All notable changes to FullRGB are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semver.
 
+## [Unreleased] — audit fixes: documented guarantees vs. real code
+
+### Fixed — crash
+
+- **The Hardware tab no longer kills the app.** `HidBridge` declared the P/Invoke
+  `HidD_GetCaps`, a function that exists in **no** Windows DLL (the real HID parser routine is
+  `HidP_GetCaps`, which also returns an NTSTATUS rather than a BOOL). It compiled cleanly and threw
+  `EntryPointNotFoundException` on the first device enumeration, so clicking **Hardware** terminated
+  the process. Two further bugs in the same struct: `HIDP_CAPS` had `Usage`/`UsagePage` swapped,
+  and its reserved block was 13 ushorts short — the native routine fills a fixed 64 bytes, so the
+  short declaration would have written past the managed buffer. All three are fixed, and a build
+  gate now resolves every `[DllImport]` entry point and asserts the 64-byte struct size.
+- Page builds can no longer take the app down: an exception while building the Hardware page is
+  logged and shown as an inline error instead of reaching the WPF dispatcher.
+
+### Security
+
+- **Share codes can no longer be a zip bomb.** `Import share code` decompressed with no ceiling,
+  so a ~6 KB pasted code could expand to gigabytes and hang the app. Inflation is now capped at
+  4 MB (a real profile is a few KB) and the base64 text is length-checked before decoding.
+- **Constant-time secret comparison.** The HTTP API token and the companion PIN were compared with
+  `==`; both now use `CryptographicOperations.FixedTimeEquals`.
+- **Connection cap on the HTTP listener.** Every accepted socket used to spawn an unbounded task,
+  so a peer on the same LAN could hold connections open and starve the pool (slowloris-style).
+  Concurrent connections are now capped at 16, with a short wait before a socket is dropped.
+- **Rate limiting on every route**, not just `/api/auth` (40 req/s). The dispatcher runs on the UI
+  thread, so an unthrottled flood previously froze the window, not just the server.
+- **Path-traversal guard in the protocol store.** `CommunityStore.Remove` built a path directly
+  from a string; names are now validated (no separators, no `..`, no rooted path).
+- Companion page now states plainly that its traffic is **plain HTTP with no TLS** — the PIN and
+  token are readable by anyone on the same network (en + fa).
+
+### Fixed
+
+- **Overnight schedule rules matched the wrong night.** `Sa 22:00-07:00` fired during Saturday's
+  small hours (which is really Friday night) and `Fr 22:00-07:00` lost its Saturday-morning half.
+  An overnight range is now anchored to the night it *started* on: on the morning half the weekday
+  is checked against yesterday. Documented in the Settings hint (en + fa).
+- **Test paint now asks twice, as documented.** The community-protocol safety model, `hid.writeTip`
+  and `hid.explain` all promised "two dialogs, one requiring typing" per paint, but only one dialog
+  was shown. The second is now a typed confirmation of the device's `VID:PID`.
+- **HID collection fallback is no longer silent.** When no collection matches the protocol's
+  `usagePage`/`usage`, the fallback is logged (probe) and gets a stronger warning dialog (write),
+  because a composite device can route the report to the wrong collection.
+- **`GameEventState` is genuinely lock-free.** Its comment promised volatile/Interlocked access
+  while every member was a plain auto-property; the state now uses `Volatile` and `Interlocked`
+  bit-pattern access (which also removes torn double reads on 32-bit). Public API unchanged.
+- **`/api/status` is validated before it goes on the wire** — a change to the dispatcher's internal
+  text format now surfaces as a clean JSON error object instead of breaking every client's parser.
+- **Update rollback is no longer deleted immediately.** `FullRGB.exe.old` used to be removed on the
+  very next start, so a build that crashed on launch had no way back. A marker now counts crash-free
+  starts and the rollback copy survives until two clean sessions have been reached.
+
 ## [1.6.0] — 2026-09-23 — Round 21: automation, safe mode, and the community layer
 
 ### Added — technical / architecture

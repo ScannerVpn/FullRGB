@@ -1004,6 +1004,27 @@ public static class RenderTests
         Check("schedule: no match evaluates to null",
               Config.ScheduleRules.Evaluate(tsRules, new DateTime(2026, 9, 26, 19, 0, 0)) is null);
 
+        // ---- 46b. round 21 fix: an overnight range belongs to the night it STARTED on ----
+        // 2026-09-25 is a Friday, the 26th a Saturday, the 27th a Sunday.
+        var satRule = Config.ScheduleRules.Parse("Sa 22:00-07:00=SatNight").Rules.Single();
+        Check("schedule: Sa 22:00-07:00 matches Saturday evening",
+              satRule.Matches(new DateTime(2026, 9, 26, 23, 0, 0)));
+        Check("schedule: Sa 22:00-07:00 still matches Sunday 00:30 (same night)",
+              satRule.Matches(new DateTime(2026, 9, 27, 0, 30, 0)));
+        Check("schedule: Sa 22:00-07:00 does NOT match Saturday 00:30 (that is Friday's night)",
+              !satRule.Matches(new DateTime(2026, 9, 26, 0, 30, 0)));
+        Check("schedule: Sa 22:00-07:00 does not run on Sunday night",
+              !satRule.Matches(new DateTime(2026, 9, 27, 23, 0, 0)));
+
+        var friRule = Config.ScheduleRules.Parse("Fr 22:00-07:00=FriNight").Rules.Single();
+        Check("schedule: Fr 22:00-07:00 covers the following Saturday morning",
+              friRule.Matches(new DateTime(2026, 9, 26, 0, 30, 0))
+              && friRule.Matches(new DateTime(2026, 9, 26, 6, 59, 0)));
+        Check("schedule: Fr 22:00-07:00 ends at 07:00 (exclusive)",
+              !friRule.Matches(new DateTime(2026, 9, 26, 7, 0, 0)));
+        Check("schedule: Fr 22:00-07:00 does not cover Saturday night",
+              !friRule.Matches(new DateTime(2026, 9, 26, 23, 0, 0)));
+
         // ---- 47. round 21: profile share (file + short code) ----
         var shared = new Config.Profile
         {
@@ -1034,6 +1055,25 @@ public static class RenderTests
               Config.ProfileShare.ImportCode("FRGB1-not!valid!base64!!", out var badErr) is null && badErr.Length > 0);
         Check("profile share: dedupe names stay unique",
               Config.ProfileShare.DedupeName(new[] { "Gaming" }, "Gaming") == "Gaming (2)");
+
+        // ---- 47b. round 21 fix: a share code cannot inflate past the zip-bomb guard ----
+        // 6 MB of one repeated character compresses to a few KB, so a tiny code pasted from a
+        // chat would otherwise expand into gigabytes and hang the app on "Import share code".
+        {
+            string bombJson = "{\"app\":\"FullRGB\",\"kind\":\"profile\",\"profile\":{\"name\":\"" +
+                              new string('A', 6 * 1024 * 1024) + "\"}}";
+            byte[] bombRaw = System.Text.Encoding.UTF8.GetBytes(bombJson);
+            using var bombGz = new MemoryStream();
+            using (var zip = new System.IO.Compression.GZipStream(
+                       bombGz, System.IO.Compression.CompressionLevel.SmallestSize, leaveOpen: true))
+                zip.Write(bombRaw, 0, bombRaw.Length);
+            string bombCode = Config.ProfileShare.Prefix +
+                Convert.ToBase64String(bombGz.ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var bombResult = Config.ProfileShare.ImportCode(bombCode, out var bombErr);
+            Check("profile share: a zip-bomb code is refused, not expanded",
+                  bombResult is null && bombErr.Length > 0,
+                  $"{bombGz.Length} B code -> {bombRaw.Length} B payload; err={bombErr}");
+        }
 
         // ---- 48. round 21: game event state (the GamePulse inputs) ----
         Sensors.GameEventState.Reset();
@@ -1141,6 +1181,62 @@ public static class RenderTests
         const string noContent = """{"schema":"fullrgb.hid/1","name":"X","vid":"2A7A","pid":"939F"}""";
         Check("hid protocol: a definition with no sections is rejected",
               Hid.HidProtocolFile.Parse(noContent, "x.json", out _) is null);
+
+        // ---- 50b. round 21 fix: the protocol store never builds a path from a raw string ----
+        Check("hid store: a plain file name is accepted",
+              Hid.CommunityStore.IsSafeStoreName("my-mouse.json"));
+        Check("hid store: a traversal name is refused",
+              !Hid.CommunityStore.IsSafeStoreName("..\\..\\evil.json")
+              && !Hid.CommunityStore.IsSafeStoreName("../evil.json")
+              && !Hid.CommunityStore.IsSafeStoreName("sub/evil.json")
+              && !Hid.CommunityStore.IsSafeStoreName("C:\\evil.json")
+              && !Hid.CommunityStore.IsSafeStoreName(""));
+        Check("hid store: removing a traversal name is refused without touching the disk",
+              Hid.CommunityStore.Remove("..\\..\\evil.json") == "invalid protocol file name");
+
+        // ---- 50c. round 22 fix: the HID bridge's P/Invoke surface must actually resolve ----
+        // HidBridge declared "HidD_GetCaps", which exists in NO Windows DLL. It compiled fine and
+        // threw EntryPointNotFoundException the first time the Hardware page enumerated devices,
+        // which killed the app on the Hardware tab. Resolve every [DllImport] up front instead of
+        // discovering it at click time.
+        var missingExports = new List<string>();
+        foreach (var m in typeof(Hid.HidBridge).GetMethods(
+                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+                     | System.Reflection.BindingFlags.Public))
+        {
+            var dllAttr = (System.Runtime.InteropServices.DllImportAttribute?)
+                Attribute.GetCustomAttribute(m, typeof(System.Runtime.InteropServices.DllImportAttribute));
+            if (dllAttr is null) continue;
+            string entry = string.IsNullOrEmpty(dllAttr.EntryPoint) ? m.Name : dllAttr.EntryPoint;
+            // Mirror the CLR's own probe order: a Unicode import resolves as "NameW" first, an
+            // Ansi one as "NameA" (that is how SetupDiGetClassDevs finds SetupDiGetClassDevsA).
+            string[] candidates = dllAttr.CharSet == System.Runtime.InteropServices.CharSet.Unicode
+                                  || dllAttr.CharSet == System.Runtime.InteropServices.CharSet.Auto
+                ? new[] { entry + "W", entry }
+                : new[] { entry, entry + "A" };
+            try
+            {
+                IntPtr lib = System.Runtime.InteropServices.NativeLibrary.Load(dllAttr.Value);
+                try
+                {
+                    if (!candidates.Any(c => System.Runtime.InteropServices.NativeLibrary.TryGetExport(lib, c, out _)))
+                        missingExports.Add($"{dllAttr.Value}!{entry}");
+                }
+                finally { System.Runtime.InteropServices.NativeLibrary.Free(lib); }
+            }
+            catch (Exception e) { missingExports.Add($"{dllAttr.Value}: {e.Message}"); }
+        }
+        Check("hid bridge: every DllImport entry point exists",
+              missingExports.Count == 0, string.Join(", ", missingExports));
+
+        // The native routine fills a FIXED 64-byte HIDP_CAPS, so a short managed declaration means
+        // it writes past the buffer. The struct was also missing 13 of the 17 reserved ushorts.
+        var capsType = typeof(Hid.HidBridge).GetNestedType("HIDP_CAPS",
+            System.Reflection.BindingFlags.NonPublic);
+        Check("hid bridge: HIDP_CAPS matches the native 64-byte layout",
+              capsType is not null && System.Runtime.InteropServices.Marshal.SizeOf(capsType) == 64,
+              capsType is null ? "struct not found"
+                               : $"size={System.Runtime.InteropServices.Marshal.SizeOf(capsType)}");
 
         // ---- 51. round 21: updater version comparison ----
         Check("update: a higher minor is newer", Update.AppUpdater.IsNewer("1.6.0", "1.7.0"));

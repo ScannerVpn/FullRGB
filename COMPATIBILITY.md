@@ -58,16 +58,45 @@ Legend:
 
 | Device | VID:PID | Status | Notes |
 |---|---|---|---|
-| CASUE USB KB | 2A7A:939F | ❌ not controllable | Vendor HID channel exists (COL04, usagePage `0xFF01`, 8-byte feature report) — protocol help welcome |
-| INSTANT USB GAMING MOUSE | 30FA:1140 | ❌ not controllable | Same situation; probe read-only |
+| CASUE USB KB | 2A7A:939F | ❌ not controllable | **No vendor HID channel at all.** Its three collections are all standard (`0x0001/0x0006` keyboard, `0x000C/0x0001` consumer, `0x0001/0x0080` system control) and none exposes a feature report — a community protocol file cannot reach this device |
+| INSTANT USB GAMING MOUSE | 30FA:1140 | 🧩 community candidate | **This is the one with the vendor channel:** `usagePage 0xFF01 / usage 0x0001` with an 8-byte feature report (plus `0xFF00/0x0001`). A protocol file has something to talk to here — probe is read-only and safe |
 | Razer / Logitech / SteelSeries mainstream | — | ✅ works | Via bundled OpenRGB detectors |
-| Cheap OEM mouse/keyboard (no driver) | — | 🧩 community candidate | Import a protocol file; see docs/hid-protocols |
+| Cheap OEM mouse/keyboard (no driver) | — | 🧩 community candidate | Import a protocol file; see docs/hid-protocols. Check the collection list first: without a vendor `usagePage` (0xFF00–0xFFFF) and a feature report, there is nothing to write to |
+
+> Collection lists above were measured with `HidP_GetCaps`, not copied from a spec sheet.
+> The 0xFF01 channel was previously listed against the keyboard; that was wrong — it belongs
+> to the mouse.
 
 ## GPUs
 
 | Device | VID:PID | Status | Notes |
 |---|---|---|---|
 | Zotac RTX 4070 Ti SUPER | 19DA:7675 | ❌ not controllable | OpenRGB registers the NvAPI I2C interface but has no controller for this board — not a FullRGB bug |
+
+## Community protocol writes — risk and tested devices
+
+Reading a community protocol (a probe) is always safe: it is the same read-only feature-report
+traffic FullRGB already uses for detection. **Writing is not.** A protocol file is an untested
+guess about a firmware nobody has documentation for, and a wrong `SET_FEATURE` payload can leave
+a device's lighting wedged until it is unplugged or power-cycled.
+
+FullRGB therefore gates every write on all of: the file declaring `"experimentalWrite": true`, the
+global switch in **Hardware → Community protocols**, and **two confirmations on every single test
+paint** — a yes/no dialog, then the device's VID:PID typed out by hand.
+
+This table records what the community has actually tried. Add a row when you test one — the
+failures are the most useful rows here.
+
+| Device | VID:PID | Protocol file | Result | Notes |
+|---|---|---|---|---|
+| CASUE USB KB | 2A7A:939F | — | 🚫 not reachable | No vendor HID collection and no feature report on any of its three collections — nothing to probe or write |
+| INSTANT USB GAMING MOUSE | 30FA:1140 | — | ⬜ probe only | Vendor channel present (`usagePage 0xFF01 / usage 0x0001`, 8-byte feature report); read tested, no write protocol published yet |
+
+Result legend: `✅ lit up` — write worked and the device stayed responsive · `⚠️ partial` — some
+modes/colours worked · `❌ no effect` — write was accepted but nothing changed · `🧱 bricked` —
+device needed a replug/power cycle afterwards · `⬜ probe only` — read tested, write not attempted ·
+`🚫 not reachable` — the device exposes no vendor collection/feature report, so no protocol file
+can address it.
 
 ---
 

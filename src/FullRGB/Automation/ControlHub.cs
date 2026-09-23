@@ -44,6 +44,20 @@ public sealed class ControlHub : IDisposable
     private readonly Queue<long> _authFailures = new();
     private readonly object _authLock = new();
 
+    /// <summary>Global request timestamps (throttle for EVERY route, not just /api/auth),
+    /// last 1 s window.</summary>
+    private readonly Queue<long> _requestTimes = new();
+    private readonly object _rateLock = new();
+
+    /// <summary>Caps concurrent HTTP connections. Without it, a peer on the same LAN can hold
+    /// hundreds of sockets open and starve the pool (slowloris-style).</summary>
+    private readonly SemaphoreSlim _httpSlots = new(MaxConcurrentHttp, MaxConcurrentHttp);
+
+    private const int MaxConcurrentHttp = 16;
+    private const int MaxRequestsPerSecond = 40;
+    /// <summary>How long an accepted socket waits for a free worker before it is dropped.</summary>
+    private static readonly TimeSpan SlotWait = TimeSpan.FromSeconds(2);
+
     private ControlHub(Dispatcher dispatcher, IControlTarget target, bool companion)
     {
         _dispatcher = dispatcher;
@@ -75,6 +89,7 @@ public sealed class ControlHub : IDisposable
     {
         try { _cts?.Cancel(); } catch { }
         try { _listener?.Stop(); } catch { }
+        try { _httpSlots.Dispose(); } catch { }
         try
         {
             var tokenPath = Path.Combine(
@@ -200,7 +215,18 @@ public sealed class ControlHub : IDisposable
             try
             {
                 client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-                _ = Task.Run(() => HandleHttpAsync(client, ct), ct);
+                // Back-pressure instead of an unbounded Task.Run per connection: when every
+                // worker is busy the socket is dropped rather than queued forever, so a peer
+                // that opens sockets and never finishes a request cannot exhaust the pool.
+                if (!await _httpSlots.WaitAsync(SlotWait, ct).ConfigureAwait(false))
+                {
+                    try { client.Dispose(); } catch { }
+                    client = null;
+                    continue;
+                }
+                // No token on Task.Run: the delegate must always run so it can release the slot.
+                _ = Task.Run(() => HandleHttpAsync(client, ct));
+                client = null;   // HandleHttpAsync owns the socket from here
             }
             catch (OperationCanceledException) { break; }
             catch (Exception)
@@ -214,18 +240,16 @@ public sealed class ControlHub : IDisposable
 
     private async Task HandleHttpAsync(TcpClient client, CancellationToken ct)
     {
-        using var _c = client;
         try
         {
+            using var _c = client;
             client.ReceiveTimeout = 5000;
             client.SendTimeout = 5000;
             var stream = client.GetStream();
             var req = await HttpRequest.ReadAsync(stream, ct).ConfigureAwait(false);
             if (req is null) return;
 
-            var remote = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
-            bool loopback = IPAddress.IsLoopback(remote);
-            var (status, contentType, body) = Route(req, loopback);
+            var (status, contentType, body) = Route(req);
             byte[] payload = Encoding.UTF8.GetBytes(body);
             var sb = new StringBuilder();
             sb.Append("HTTP/1.1 ").Append(status).Append("\r\n");
@@ -239,11 +263,36 @@ public sealed class ControlHub : IDisposable
             await stream.FlushAsync(ct).ConfigureAwait(false);
         }
         catch { /* a dropped phone or a port scanner must not log spam */ }
+        finally { try { _httpSlots.Release(); } catch { } }
+    }
+
+    /// <summary>Constant-time string compare — the token and the PIN must not leak their
+    /// contents through the time their comparison takes.</summary>
+    private static bool FixedTimeEquals(string a, string b)
+        => CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(a ?? ""), Encoding.UTF8.GetBytes(b ?? ""));
+
+    /// <summary>Throttle shared by every route. The dispatcher runs on the UI thread, so an
+    /// unthrottled flood of /api/color calls would freeze the window, not just the server.</summary>
+    private bool RateLimitOk()
+    {
+        lock (_rateLock)
+        {
+            long now = Environment.TickCount64;
+            while (_requestTimes.Count > 0 && now - _requestTimes.Peek() > 1000) _requestTimes.Dequeue();
+            if (_requestTimes.Count >= MaxRequestsPerSecond) return false;
+            _requestTimes.Enqueue(now);
+            return true;
+        }
     }
 
     /// <summary>Route table. Returns (status line, content type, body).</summary>
-    private (string, string, string) Route(HttpRequest req, bool loopback)
+    private (string, string, string) Route(HttpRequest req)
     {
+        if (!RateLimitOk())
+            return ("429 Too Many Requests", "application/json",
+                CommandDispatcher.JsonErr("too many requests, slow down"));
+
         string path = req.Path;
         string token = req.Query("token");
         if (token.Length == 0) token = req.Header("x-fullrgb-token");
@@ -257,7 +306,7 @@ public sealed class ControlHub : IDisposable
             if (!BruteForceOk()) return ("429 Too Many Requests", "application/json",
                 CommandDispatcher.JsonErr("too many attempts, wait a minute"));
             string pin = CommandDispatcher.JsonGet(req.Body, "pin");
-            if (pin == _target.CompanionPin) return ("200 OK", "application/json",
+            if (FixedTimeEquals(pin, _target.CompanionPin)) return ("200 OK", "application/json",
                 CommandDispatcher.JsonOk($"\"token\":\"{ApiToken}\""));
             NoteAuthFailure();
             return ("403 Forbidden", "application/json", CommandDispatcher.JsonErr("wrong pin"));
@@ -268,13 +317,13 @@ public sealed class ControlHub : IDisposable
 
         // Everything below needs the session token (even from localhost — a malicious web
         // page in the user's browser could otherwise drive DNS-rebinding/CSRF calls here).
-        if (token != ApiToken)
+        if (!FixedTimeEquals(token, ApiToken))
             return ("401 Unauthorized", "application/json", CommandDispatcher.JsonErr("missing or wrong token"));
 
         string CallText(string command) => DispatchOnUiThread(command);
 
         if (req.Method == "GET" && (path == "/api/status" || path == "/api/state"))
-            return ("200 OK", "application/json", CallText("status"));
+            return ("200 OK", "application/json", JsonOrError(CallText("status"), "status"));
 
         if (req.Method == "GET" && path == "/api/profiles")
         {
@@ -366,6 +415,23 @@ public sealed class ControlHub : IDisposable
         }
 
         return ("404 Not Found", "application/json", CommandDispatcher.JsonErr("no such route: " + path));
+    }
+
+    /// <summary>The dispatcher returns hand-built JSON. Validate it before it goes on the wire,
+    /// so a future change to that internal text format surfaces as a clean error object instead
+    /// of a body that silently breaks every client's JSON parser.</summary>
+    private static string JsonOrError(string raw, string what)
+    {
+        try
+        {
+            using var _ = System.Text.Json.JsonDocument.Parse(raw);
+            return raw;
+        }
+        catch
+        {
+            AppLog.Warn($"dispatcher reply for '{what}' was not valid JSON");
+            return CommandDispatcher.JsonErr($"{what} reply was not valid JSON");
+        }
     }
 
     private void NoteAuthFailure()

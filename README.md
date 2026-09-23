@@ -116,6 +116,24 @@ Builds are produced by CI (`windows-build.yml`) which runs `--rendertest` + `--u
 verifies the embedded engine is present before attaching the exe. The in-app updater only
 trusts the `FullRGB.exe` asset of this repo's latest release.
 
+### Security notes
+
+- **Auto-update integrity vs. authenticity.** The updater downloads over HTTPS and verifies the
+  file's SHA-256 — but that hash is *self-referential*: it is compared against the hash recorded
+  at download time, so it catches corruption or tampering between download and apply, **not** a
+  malicious asset published by a compromised GitHub account. Real authenticity needs Authenticode
+  code-signing of the released exe (planned; not yet in place). Until then, only install from the
+  official Releases page and treat any other mirror as untrusted.
+- **Rollback.** After a self-swap the previous build is kept as `FullRGB.exe.old` and only
+  deleted once the new build has started cleanly twice. If a new build fails to start, the `.old`
+  file is still there next to the exe and can be renamed back over it.
+- **Mobile companion is plain HTTP.** The companion server has no TLS: the PIN and the session
+  token travel in cleartext, so anyone on the same network can read them. Enable it only on a
+  trusted home network, never on public or shared Wi-Fi. It is off by default, and the HTTP API
+  binds to loopback unless you turn the companion on.
+- **Community protocol writes** are gated behind a global switch plus two confirmations per test
+  paint (the second one typed). See the risk section in [COMPATIBILITY.md](COMPATIBILITY.md).
+
 ---
 
 ## فارسی

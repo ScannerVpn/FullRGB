@@ -21,6 +21,17 @@ public static class ProfileShare
 {
     public const string Prefix = "FRGB1-";
 
+    /// <summary>
+    /// Ceiling for the DECOMPRESSED envelope. A share code is pasted from chat, so it is
+    /// untrusted input: gzip reaches ~1000:1, so a 4 KB code could otherwise expand to
+    /// gigabytes and hang the app ("Import share code" as a one-line DoS). A real profile is a
+    /// few KB of JSON, so this limit is never reached in honest use.
+    /// </summary>
+    private const int MaxInflatedBytes = 4 * 1024 * 1024;
+
+    /// <summary>Ceiling for the base64 text itself, checked before any decoding happens.</summary>
+    private const int MaxCodeChars = 8 * 1024 * 1024;
+
     private sealed class Envelope
     {
         [JsonPropertyName("app")] public string App { get; set; } = "FullRGB";
@@ -106,11 +117,23 @@ public static class ProfileShare
             // users may paste with line breaks or a trailing quote from a chat client
             s = s.Replace("\r", "").Replace("\n", "").Trim('"', ' ', '\t');
             if (s.Length < 8) { error = "code too short"; return null; }
+            if (s.Length > MaxCodeChars) { error = "code too long"; return null; }
             byte[] gz = FromUrlSafe(s);
             using var src = new MemoryStream(gz);
             using var outMs = new MemoryStream();
             using (var zip = new GZipStream(src, CompressionMode.Decompress))
-                zip.CopyTo(outMs);
+            {
+                // Bounded copy: CopyTo() would happily write gigabytes for a hostile code.
+                byte[] buf = new byte[81920];
+                int n;
+                while ((n = zip.Read(buf, 0, buf.Length)) > 0)
+                {
+                    if (outMs.Length + n > MaxInflatedBytes)
+                        throw new InvalidDataException(
+                            $"share code expands past the {MaxInflatedBytes / (1024 * 1024)} MB limit");
+                    outMs.Write(buf, 0, n);
+                }
+            }
             return ImportJson(Encoding.UTF8.GetString(outMs.ToArray()), out error);
         }
         catch (Exception e)

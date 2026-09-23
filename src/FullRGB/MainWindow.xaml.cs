@@ -562,6 +562,9 @@ public partial class MainWindow : Window
         // The engine just proved itself: any pending safe-mode state can go away, and a CLI
         // one-shot that arrived while nothing was running is applied now.
         OnSessionHealthy();
+        // Same signal doubles as the update health check: reaching a live session counts as one
+        // clean start, and N of them retire the FullRGB.exe.old rollback copy left by a swap.
+        if (!Headless) Update.AppUpdater.NoteHealthyStart();
         ApplyPendingCommand();
         _edit = EffectEngine.Clone(profile.GlobalEffect);
         BuildDeviceList();
@@ -1152,7 +1155,27 @@ public partial class MainWindow : Window
         UpdatePageHeading();
         if (TabSettings.IsChecked == true) UpdateDiagnostics();
         // Rebuilt on entry, not cached: devices come and go, and a USB scan costs ~15 ms.
-        if (TabHardware.IsChecked == true) BuildHardwarePage();
+        // A page build must never be able to kill the app: an unhandled exception here reaches
+        // the WPF dispatcher and terminates the process (this is exactly how a bad P/Invoke in
+        // the HID enumeration used to crash the Hardware tab). Degrade to a visible error instead.
+        if (TabHardware.IsChecked == true)
+        {
+            try
+            {
+                BuildHardwarePage();
+            }
+            catch (Exception ex)
+            {
+                Diag.AppLog.Exception("build hardware page", ex);
+                try
+                {
+                    HwList?.Children.Clear();
+                    HwList?.Children.Add(Line(L10n.T("status.failed", ex.Message), "Warn"));
+                    SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error);
+                }
+                catch { }
+            }
+        }
     }
 
     // Screenshot hooks (--uishot): switch pages without a mouse.

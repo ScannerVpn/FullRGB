@@ -326,7 +326,7 @@ public static class L10n
             // ---------- round 21: time schedule ----------
             ["ts.title"] = "Time schedule",
             ["ts.enable"] = "Switch profiles by time of day",
-            ["ts.hint"] = "One rule per line: HH:MM-HH:MM=Profile. Optional days (Mo-Fr or Sa,Su) in front. First matching rule wins; ranges may wrap midnight. Example:\n22:00-07:00=Night\nMo-Fr 08:00-18:00=Work",
+            ["ts.hint"] = "One rule per line: HH:MM-HH:MM=Profile. Optional days (Mo-Fr or Sa,Su) in front. First matching rule wins; ranges may wrap midnight. On a range that wraps midnight the days name the night it STARTS on, so \"Sa 22:00-07:00\" runs from Saturday 22:00 to Sunday 07:00. Example:\n22:00-07:00=Night\nMo-Fr 08:00-18:00=Work",
 
             // ---------- round 21: per-app profiles ----------
             ["fg.addCurrent"] = "Add current app → active profile",
@@ -336,7 +336,7 @@ public static class L10n
             // ---------- round 21: mobile companion ----------
             ["companion.title"] = "Mobile companion",
             ["companion.enable"] = "Allow control from other devices on this network",
-            ["companion.hint"] = "Opens a small control page on your phone (same Wi-Fi). The server binds to the network only while this is on; every API call needs the session token the page gets with the PIN.",
+            ["companion.hint"] = "Opens a small control page on your phone (same Wi-Fi). The server binds to the network only while this is on; every API call needs the session token the page gets with the PIN. The traffic is plain HTTP with no TLS, so the PIN and token can be read by anyone on the same network — use this on your own trusted home network only, never on public or shared Wi-Fi.",
             ["companion.open"] = "Open page",
             ["companion.copy"] = "Copy URL + PIN",
             ["companion.toggled"] = "Companion setting saved — the control server restarted",
@@ -401,11 +401,15 @@ public static class L10n
             ["hid.writeWarn2"] = "Type FULLRGB to enable experimental writes",
             ["hid.writeCancelled"] = "Experimental writes stayed off",
             ["hid.badFile"] = "Protocol file rejected: {0}",
+            ["hid.enumFailed"] = "Could not enumerate HID devices: {0} — community protocols are unavailable this session",
             ["hid.covers"] = "{0} → community protocol “{1}” loaded (see below)",
             ["hid.deviceNotFound"] = "Device {0} is not present right now",
             ["hid.probeFailed"] = "Probe failed: {0}",
             ["hid.probeOk"] = "Read: {0}",
             ["hid.paintWarn"] = "One solid-colour report will be written to “{0}”. If the protocol file is wrong, the lighting may stop until the device is unplugged.",
+            ["hid.paintWarnFallback"] = "No HID collection of “{0}” matched the usagePage/usage this protocol names, so the report goes to the device's FIRST collection instead — on a composite device that is likely the wrong one. If the protocol file is wrong, the lighting may stop until the device is unplugged.",
+            ["hid.paintWarn2"] = "Type {0} to confirm this write",
+            ["hid.paintCancelled"] = "Test paint cancelled",
             ["hid.paintContinue"] = "Write once",
             ["hid.writeNeeded"] = "Enable experimental writes first (button above)",
             ["hid.paintOk"] = "Paint written to {0}",
@@ -733,7 +737,7 @@ public static class L10n
             // ---------- round 21: time schedule ----------
             ["ts.title"] = "زمان‌بندی ساعت‌ها",
             ["ts.enable"] = "تعویض پروفایل بر اساس ساعت روز",
-            ["ts.hint"] = "هر خط یک قانون: HH:MM-HH:MM=پروفایل. روزهای هفته هم اختیاری است (Mo-Fr یا Sa,Su). اولین قانون منطبق برنده است؛ بازه می‌تواند از نیمه‌شب بگذرد. نمونه:\n22:00-07:00=شب\nMo-Fr 08:00-18:00=کار",
+            ["ts.hint"] = "هر خط یک قانون: HH:MM-HH:MM=پروفایل. روزهای هفته هم اختیاری است (Mo-Fr یا Sa,Su). اولین قانون منطبق برنده است؛ بازه می‌تواند از نیمه‌شب بگذرد. در بازه‌ای که از نیمه‌شب می‌گذرد، روزها به شبی اشاره دارند که بازه در آن شروع می‌شود؛ یعنی «Sa 22:00-07:00» از شنبه ۲۲:۰۰ تا یکشنبه ۰۷:۰۰ اجرا می‌شود. نمونه:\n22:00-07:00=شب\nMo-Fr 08:00-18:00=کار",
 
             // ---------- round 21: per-app profiles ----------
             ["fg.addCurrent"] = "افزودن برنامهٔ فعلی → پروفایل فعال",
@@ -743,7 +747,7 @@ public static class L10n
             // ---------- round 21: mobile companion ----------
             ["companion.title"] = "همراه موبایل",
             ["companion.enable"] = "اجازهٔ کنترل از دستگاه‌های دیگر این شبکه",
-            ["companion.hint"] = "یک صفحهٔ کنترل کوچک روی موبایل (همان وای‌فای) باز می‌شود. سرور فقط وقتی این گزینه روشن است به شبکه وصل می‌شود و هر درخواست API به توکن نشست نیاز دارد که صفحه آن را با پین می‌گیرد.",
+            ["companion.hint"] = "یک صفحهٔ کنترل کوچک روی موبایل (همان وای‌فای) باز می‌شود. سرور فقط وقتی این گزینه روشن است به شبکه وصل می‌شود و هر درخواست API به توکن نشست نیاز دارد که صفحه آن را با پین می‌گیرد. ترافیک روی HTTP ساده و بدون TLS است، پس پین و توکن برای هر کسی که روی همان شبکه باشد قابل شنیدن است — این گزینه را فقط روی شبکهٔ خانگی مورد اعتماد خودت روشن کن، نه روی وای‌فای عمومی یا مشترک.",
             ["companion.open"] = "باز کردن صفحه",
             ["companion.copy"] = "کپی آدرس + پین",
             ["companion.toggled"] = "تنظیم همراه ذخیره شد — سرور کنترل ری‌استارت شد",
@@ -808,11 +812,15 @@ public static class L10n
             ["hid.writeWarn2"] = "برای فعال شدن نوشتن آزمایشی بنویس FULLRGB",
             ["hid.writeCancelled"] = "نوشتن آزمایشی خاموش ماند",
             ["hid.badFile"] = "فایل پروتکل رد شد: {0}",
+            ["hid.enumFailed"] = "شمارش دستگاه‌های HID ممکن نشد: {0} — پروتکل‌های اجتماعی در این نشست در دسترس نیستند",
             ["hid.covers"] = "{0} → پروتکل اجتماعی «{1}» بارگذاری شده (پایین ببین)",
             ["hid.deviceNotFound"] = "دستگاه {0} همین حالا وصل نیست",
             ["hid.probeFailed"] = "پروب ناموفق: {0}",
             ["hid.probeOk"] = "خوانده شد: {0}",
             ["hid.paintWarn"] = "یک گزارش تک‌رنگ روی «{0}» نوشته می‌شود. اگر فایل پروتکل اشتباه باشد، تا جدا کردن دستگاه نور ممکن است قطع بماند.",
+            ["hid.paintWarnFallback"] = "هیچ collection‌ای از «{0}» با usagePage/usageی که این پروتکل معرفی کرده مطابقت نداشت، پس گزارش به اولین collection دستگاه می‌رود — روی یک دستگاه ترکیبی احتمالاً همان اشتباهی است. اگر فایل پروتکل اشتباه باشد، تا جدا کردن دستگاه نور ممکن است قطع بماند.",
+            ["hid.paintWarn2"] = "برای تأیید این نوشتن، {0} را تایپ کن",
+            ["hid.paintCancelled"] = "رنگ تستی لغو شد",
             ["hid.paintContinue"] = "یک بار بنویس",
             ["hid.writeNeeded"] = "اول نوشتن آزمایشی را روشن کن (دکمهٔ بالا)",
             ["hid.paintOk"] = "رنگ روی {0} نوشته شد",

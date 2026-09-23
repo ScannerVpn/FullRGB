@@ -59,8 +59,10 @@ public static class HidBridge
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
+    /// <summary>HidD_GetAttributes requires the caller to pre-fill <c>Size</c> with
+    /// sizeof(HIDD_ATTRIBUTES) before the call — hence <c>ref</c>, not <c>out</c>.</summary>
     [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_GetAttributes(IntPtr handle, out HIDD_ATTRIBUTES attrs);
+    private static extern bool HidD_GetAttributes(IntPtr handle, ref HIDD_ATTRIBUTES attrs);
 
     [DllImport("hid.dll", SetLastError = true)]
     private static extern bool HidD_GetPreparsedData(IntPtr handle, out IntPtr preparsedData);
@@ -74,8 +76,18 @@ public static class HidBridge
     [DllImport("hid.dll", SetLastError = true)]
     private static extern bool HidD_SetFeature(IntPtr handle, byte[] report, int reportLength);
 
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_GetCaps(IntPtr preparsedData, out HIDP_CAPS caps);
+    /// <summary>
+    /// The HID parser routine lives in hid.dll as <c>HidP_GetCaps</c> — NOT <c>HidD_GetCaps</c>,
+    /// which does not exist in any Windows DLL. The wrong name compiled fine and then threw
+    /// <see cref="EntryPointNotFoundException"/> the first time the Hardware page enumerated
+    /// devices, taking the whole app down with it.
+    /// Returns an NTSTATUS, not a BOOL: compare against HIDP_STATUS_SUCCESS (0x00110000), never
+    /// treat the value as a boolean.
+    /// </summary>
+    [DllImport("hid.dll")]
+    private static extern int HidP_GetCaps(IntPtr preparsedData, out HIDP_CAPS caps);
+
+    private const int HIDP_STATUS_SUCCESS = 0x00110000;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct HIDD_ATTRIBUTES
@@ -86,15 +98,26 @@ public static class HidBridge
         public ushort VersionNumber;
     }
 
+    /// <summary>
+    /// Layout must match <c>hidpi.h</c> EXACTLY: the native routine fills a fixed 64-byte struct,
+    /// so a short managed declaration means it writes past the buffer (memory corruption). Two
+    /// fields were also swapped and the reserved block was 13 ushorts too small:
+    ///   USAGE Usage; USAGE UsagePage; USHORT Input/Output/FeatureReportByteLength;
+    ///   USHORT Reserved[17]; then the ten Number* counters.
+    /// Getting Usage/UsagePage the wrong way round silently breaks every usagePage-based match.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct HIDP_CAPS
     {
-        public ushort UsagePage;
         public ushort Usage;
+        public ushort UsagePage;
         public ushort InputReportByteLength;
         public ushort OutputReportByteLength;
         public ushort FeatureReportByteLength;
-        public ushort Reserved_1a, Reserved_1c, Reserved_1e, Reserved_20;
+        // Reserved[17] — spelled out because a fixed-size buffer would need unsafe code.
+        public ushort Reserved0, Reserved1, Reserved2, Reserved3, Reserved4, Reserved5, Reserved6,
+                      Reserved7, Reserved8, Reserved9, Reserved10, Reserved11, Reserved12,
+                      Reserved13, Reserved14, Reserved15, Reserved16;
         public ushort NumberLinkCollectionNodes;
         public ushort NumberInputButtonCaps;
         public ushort NumberInputValueCaps;
@@ -163,13 +186,15 @@ public static class HidBridge
         if (h == IntPtr.Zero) return null;
         try
         {
-            if (!HidD_GetAttributes(h, out var attrs)) return null;
+            // Size MUST be filled in first: the API validates it and returns FALSE otherwise.
+            var attrs = new HIDD_ATTRIBUTES { Size = Marshal.SizeOf<HIDD_ATTRIBUTES>() };
+            if (!HidD_GetAttributes(h, ref attrs)) return null;
             ushort up = 0, us = 0, fl = 0, ol = 0;
             if (HidD_GetPreparsedData(h, out var preparsed))
             {
                 try
                 {
-                    if (HidD_GetCaps(preparsed, out var caps))
+                    if (HidP_GetCaps(preparsed, out var caps) == HIDP_STATUS_SUCCESS)
                     {
                         up = caps.UsagePage; us = caps.Usage;
                         fl = caps.FeatureReportByteLength; ol = caps.OutputReportByteLength;
