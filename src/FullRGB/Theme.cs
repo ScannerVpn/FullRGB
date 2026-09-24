@@ -100,6 +100,30 @@ public static class Theme
     public static double Luminance(Color c)
         => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
 
+    /// <summary>
+    /// WCAG 2.1 contrast ratio (1..21) between two opaque colours.
+    ///
+    /// Deliberately separate from <see cref="Luminance"/>: that one is a plain weighted average used
+    /// for colour maths, while WCAG requires the sRGB gamma expansion, and the two disagree by a
+    /// lot. "Faint" is 10.5px text that carries meaning (device meta lines, hints), so it has to
+    /// clear 4.5:1 — it measured 3.13:1 before round 22.
+    /// </summary>
+    public static double ContrastRatio(string hexA, string hexB)
+    {
+        double a = RelativeLuminance(Parse(hexA, Colors.Black));
+        double b = RelativeLuminance(Parse(hexB, Colors.Black));
+        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+    }
+
+    private static double RelativeLuminance(Color c)
+        => 0.2126 * SrgbChannel(c.R) + 0.7152 * SrgbChannel(c.G) + 0.0722 * SrgbChannel(c.B);
+
+    private static double SrgbChannel(byte v)
+    {
+        double s = v / 255.0;
+        return s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+    }
+
     /// <summary>Hue-rotates a colour, keeping saturation and value — used for the brand triad.</summary>
     public static Color Rotate(Color c, double degrees)
     {

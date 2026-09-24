@@ -103,6 +103,56 @@ public partial class App : Application
             return;
         }
 
+        // --audiotest[=seconds]: print the live audio analysis.
+        //
+        // "The music effect does not follow the song" cannot be diagnosed from a description — this
+        // shows exactly what the analyser sees (overall level, the three bands, which band the auto
+        // detector picked, and the beat envelope) while music plays. Written to the app log as well as
+        // stdout, so it also lands in the diagnostics zip.
+        var audioArg = e.Args.FirstOrDefault(a => a.StartsWith("--audiotest", StringComparison.OrdinalIgnoreCase));
+        if (audioArg is not null)
+        {
+            _headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            int seconds = 15;
+            if (audioArg.Contains('=') && int.TryParse(audioArg.Split('=')[1], out int sec))
+                seconds = Math.Clamp(sec, 3, 120);
+            RunAudioTest(seconds);
+            Shutdown(0);
+            return;
+        }
+
+        // --hid-list: print every HID collection (VID:PID, usagePage, usage, report lengths).
+        // The whole community-protocol workflow depends on those numbers and nothing else in the
+        // app reported them, so authors had to reach for a third-party HID tool first.
+        // --hid-list=json emits a probe skeleton for each vendor channel instead.
+        var hidArg = e.Args.FirstOrDefault(a => a.StartsWith("--hid-list", StringComparison.OrdinalIgnoreCase));
+        if (hidArg is not null)
+        {
+            _headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            bool json = hidArg.Contains('=') &&
+                        hidArg.Split('=', 2)[1].Equals("json", StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                if (json)
+                {
+                    var vendor = Hid.HidBridge.Enumerate()
+                        .Where(c => c.UsagePage is >= 0xFF00 and <= 0xFFFF)
+                        .Where(c => c.FeatureLength > 0 || c.OutputLength > 0)
+                        .ToList();
+                    PrintOut(vendor.Count == 0
+                        ? "No vendor HID channel with a readable report was found on this machine."
+                        : string.Join(Environment.NewLine + Environment.NewLine,
+                                      vendor.Select(Hid.HidBridge.ProtocolSkeleton)));
+                }
+                else PrintOut(Hid.HidBridge.DescribeAll());
+            }
+            catch (Exception ex) { PrintOut("hid-list failed: " + ex.Message); }
+            Shutdown(0);
+            return;
+        }
+
         // --enginetask=status|register|remove: headless control of the elevated engine task.
         // Exists so the RGB-RAM path can be verified and repaired without the GUI (and so this
         // agent could test the real code, not a re-implementation of it).
@@ -290,6 +340,14 @@ public partial class App : Application
         // user never has to reinstall by hand. Must happen before any engine/UI work.
         try
         {
+            // Rollback FIRST: it needs both the rollback marker and the previous run's state,
+            // and CleanupStale below would delete the .old copy it depends on.
+            if (Update.AppUpdater.TryRollbackBrokenUpdate(out _))
+            {
+                Update.AppUpdater.Relaunch(e.Args);
+                Shutdown(0);
+                return;
+            }
             Update.AppUpdater.CleanupStale();
             var applied = Update.AppUpdater.ApplyPendingOnStartup(e.Args);
             if (applied is not null)
@@ -328,6 +386,13 @@ public partial class App : Application
             Shutdown(0);
             return;
         }
+
+        // Only the PRIMARY instance owns the marker: a second instance that starts and immediately
+        // exits must not overwrite (or clear) the running one's marker, or a real crash would look
+        // clean. Written here, read by the window once it is up.
+        Diag.SessionMarker.Begin();
+        if (Diag.SessionMarker.PreviousUncleanRun is { Length: > 0 } previousRun)
+            Diag.AppLog.Warn($"previous session did not exit cleanly (started {previousRun})");
 
         // NO automatic elevation. Everything on the HID path (motherboard headers, Corsair
         // Commander Core, ARGB fans) works as a normal user; only RGB RAM/GPU need SMBus, which
@@ -376,6 +441,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         if (!_headless) ProfileStore.Save(Settings);
+        // This run is ending on purpose, so the next launch must NOT report it as unclean.
+        if (!_headless) Diag.SessionMarker.End();
         try { _singleInstance?.ReleaseMutex(); } catch { }
         _singleInstance?.Dispose();
         base.OnExit(e);
@@ -420,8 +487,36 @@ public partial class App : Application
         "HTTP API:   http://127.0.0.1:" + SettingsOrDefault().ControlApiPort + "/  (token required; see docs/automation.md)\n" +
         "Mobile:     Settings -> Mobile companion (same port, PIN + token)\n\n" +
         "Diagnostics:\n" +
-        "  --export-diagnostics[=path.zip]      build the bug-report zip headlessly\n\n" +
+        "  --export-diagnostics[=path.zip]      build the bug-report zip headlessly\n" +
+        "  --hid-list                           list every HID collection (VID:PID, usagePage, usage)\n" +
+        "  --hid-list=json                      probe skeletons for the vendor HID channels\n\n" +
+        "  --audiotest[=seconds]                live audio analysis (level, bands, auto pick, beat)\n\n" +
         CommandDispatcher.HelpText;
+
+    /// <summary>Live audio readout for <c>--audiotest</c>. See the call site for why it exists.</summary>
+    private static void RunAudioTest(int seconds)
+    {
+        void Line(string text)
+        {
+            Console.WriteLine(text);
+            Diag.AppLog.Info("audiotest: " + text);
+        }
+        Line($"starting — play music now, sampling for {seconds}s");
+        using var audio = new Sensors.AudioProvider();
+        try { audio.Start(); }
+        catch (Exception e) { Line("capture failed: " + e.Message); return; }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed.TotalSeconds < seconds)
+        {
+            Thread.Sleep(200);
+            Line($"t={sw.Elapsed.TotalSeconds,5:F1}s  level={audio.Level:F3}  " +
+                 $"bass={audio.Bass:F3} mid={audio.Mid:F3} treble={audio.Treble:F3}  " +
+                 $"auto={audio.AutoLevel:F3} ({Sensors.AudioProvider.BandName(audio.AutoBandIndex)})  " +
+                 $"beat={audio.Beat:F2}");
+        }
+        Line("done");
+    }
 
     private static AppSettings SettingsOrDefault()
     {

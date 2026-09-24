@@ -80,8 +80,14 @@ public partial class MainWindow : Window
                 try { StartHub(); } catch { /* the control bus is optional */ }
                 try { StartUpdater(); } catch { /* update checks are optional */ }
                 try { StartLightingWatchdog(); } catch { /* the frame watchdog is best-effort */ }
+                try { StartHotkeys(); } catch { /* hotkeys are a convenience, never a blocker */ }
                 if (_client is { Connected: true }) OnConnected();
                 else await ConnectAsync();
+                // Say it out loud if the last run died: the crash itself left nothing in the log,
+                // so this is the only place the user learns that something went wrong. Reported
+                // AFTER the connect so it is not immediately overwritten by the status pill.
+                if (Diag.SessionMarker.PreviousUncleanRun is not null)
+                    SetStatus(L10n.T("status.uncleanExit"), StatusKind.Warn);
             }
             catch (Exception e)
             {
@@ -180,13 +186,14 @@ public partial class MainWindow : Window
             _powerMonitor = new Setup.PowerMonitor();
             _powerMonitor.Suspended += () =>
             {
+                Diag.AppLog.Info("power: suspend");
                 // Settings half of "the last settings don't come up after boot": flush pending
                 // effect edits before the freeze.
                 try { FlushPendingEdits(); } catch { }
             };
-            _powerMonitor.Resumed += () => BeginResumeRecovery();
+            _powerMonitor.Resumed += () => { Diag.AppLog.Info("power: resume event"); BeginResumeRecovery(); };
             _powerMonitor.SessionChanged += OnSessionChanged;
-            _powerMonitor.SessionEnding += () => { _osShuttingDown = true; };
+            _powerMonitor.SessionEnding += () => { Diag.AppLog.Info("power: session ending"); _osShuttingDown = true; };
         }
         catch { _powerMonitor = null; }
 
@@ -205,7 +212,13 @@ public partial class MainWindow : Window
             _lastHeartbeat = tick;
             _lastWallClock = wall;
             if (IsResumeGap(tickGap, wallGap, (long)_resumeHeartbeat.Interval.TotalMilliseconds))
+            {
+                // The heartbeat is the PRIMARY detector (WM_POWERBROADCAST is unreliable), so a
+                // detected gap must be visible in the log: without it a wake-up that failed to
+                // repair looks like the app simply stopped working for no reason.
+                Diag.AppLog.Warn($"power: suspend gap detected (tick {tickGap} ms, wall {wallGap} ms)");
                 BeginResumeRecovery();
+            }
         };
         _resumeHeartbeat.Start();
     }
@@ -441,6 +454,12 @@ public partial class MainWindow : Window
             // running" is no longer readable from the live state, so later attempts would silently
             // skip Apply and the user's effect would never come back after wake.
             bool wantPaint = _engine?.IsRunning == true || App.Settings.AutoStartEffects;
+            // This whole path used to be invisible in the log, so a failed wake-up left NOTHING to
+            // diagnose from - no file, no counts, no reason. Log the entry state and every attempt.
+            Diag.AppLog.Info($"resume recovery start: wantPaint={wantPaint}, " +
+                             $"controllers={_client?.Controllers.Count ?? -1}, " +
+                             $"unreadable={_client?.Controllers.Count(c => c.ParseFailed) ?? -1}, " +
+                             $"engineRunning={_engine?.IsRunning == true}");
 
             // The user often clicks Rescan the moment the screen comes on: let an in-flight manual
             // rescan finish instead of disposing the SDK session under it. Clicks that land DURING
@@ -456,9 +475,19 @@ public partial class MainWindow : Window
             {
                 if (_reallyExiting || _osShuttingDown || !IsLoaded) return;
                 SetStatus(L10n.T("status.resume"), StatusKind.Busy);
-                if (await TryRestoreLightingAsync(wantPaint)) return;
+                if (await TryRestoreLightingAsync(wantPaint))
+                {
+                    Diag.AppLog.Info($"resume recovery succeeded on attempt {attempt}");
+                    return;
+                }
+                Diag.AppLog.Warn($"resume recovery attempt {attempt} failed: " +
+                                 $"controllers={_client?.Controllers.Count ?? -1}, " +
+                                 $"unreadable={_client?.Controllers.Count(c => c.ParseFailed) ?? -1}, " +
+                                 $"engineRunning={_engine?.IsRunning == true}, " +
+                                 $"connected={_client?.Connected == true}");
                 await Task.Delay(TimeSpan.FromSeconds(3 * attempt));
             }
+            Diag.AppLog.Error("resume recovery FAILED after 3 attempts — lighting is still down");
             SetStatus(L10n.T("status.resumeFailed"), StatusKind.Error);
         }
         finally
@@ -573,6 +602,7 @@ public partial class MainWindow : Window
         LoadProfileToUi();
         RefreshStatus();
         CheckIcue();
+        CheckForeignOpenRgb();
         CheckSmbus();
         // Boot and wake can both hand over a SHORT device list (USB enumeration still running,
         // or the splash accepting a stable-but-partial answer). Painting what showed up is right;
@@ -658,6 +688,23 @@ public partial class MainWindow : Window
         DiagTxt.Text = string.Join(" · ", parts);
     }
 
+    /// <summary>
+    /// Is the post-connect device list good enough to stop refreshing?
+    ///
+    /// A list is only usable when it is NON-EMPTY, contains NO truncated payloads
+    /// (<see cref="SDK.RgbController.ParseFailed"/>) and has held still for a couple of samples.
+    /// Counting controllers alone was the bug: right after a resume the engine happily returns
+    /// four devices whose descriptors it cannot fill in yet, so "4 controllers, stable" looked
+    /// like a healthy session while nothing was paintable — the user's post-hibernate screenshot
+    /// (3 x "partially readable device", 0 LEDs, 0 fps).
+    ///
+    /// Pure and internal so the rule is unit-tested instead of only exercised on real hardware.
+    /// </summary>
+    internal static bool SettleReached(int controllers, int unreadable, int stable,
+                                       int iteration, int remembered)
+        => controllers > 0 && unreadable == 0 && stable >= 2
+           && (iteration >= 4 || controllers >= remembered);
+
     private async Task ConnectAsync()
     {
         SetStatus(L10n.T("status.starting"), StatusKind.Busy);
@@ -676,16 +723,27 @@ public partial class MainWindow : Window
             // devices are then expanded and painted by the code below. Bounded: an empty session
             // pays the full window, a stable answer exits in ~2 s.
             int remembered = App.DeviceCache?.Devices.Count ?? 0;
-            int last = -1, stable = 0;
-            for (int i = 0; i < 10; i++)
+            int last = -1, lastBad = -1, stable = 0, iterations = 10;
+            for (int i = 0; i < iterations; i++)
             {
                 int now = _client!.Controllers.Count;
-                if (now == 0) stable = 0;
-                else if (now == last) stable++;
+                // A TRUNCATED controller payload parses to ParseFailed=true. The engine answers
+                // with exactly those for a while after a resume, while its USB/SMBus layer is
+                // still coming back: the device list LOOKS complete (4 controllers) but not one
+                // of them is paintable. Counting controllers alone therefore declared the session
+                // repaired, ExpandAllZones did nothing, and every retry hit the same wall — the
+                // "stuck on partially readable devices after hibernate" report.
+                int bad = _client.Controllers.Count(c => c.ParseFailed);
+                if (now == 0 || bad > 0) stable = 0;
+                else if (now == last && bad == lastBad) stable++;
                 else stable = 0;
-                last = now;
-                if (now > 0 && stable >= 2 && (i >= 4 || now >= remembered)) break;
-                if (i == 9) break;
+                last = now; lastBad = bad;
+                if (SettleReached(now, bad, stable, i, remembered)) break;
+                // Seen truncated replies? Be patient: a post-hibernate engine needs longer for USB
+                // and SMBus to come back, and giving up early only costs another full engine
+                // restart. Bounded so a permanently broken device cannot hang the connect.
+                if (bad > 0 && iterations < 25) iterations = 25;
+                if (i == iterations - 1) break;
                 try
                 {
                     await Task.Delay(800);
@@ -693,6 +751,9 @@ public partial class MainWindow : Window
                 }
                 catch { break; } // session died mid-wait: the caller's Connected check reports it
             }
+            Diag.AppLog.Info($"connect: {_client.Controllers.Count} controller(s), " +
+                             $"{_client.Controllers.Count(c => c.ParseFailed)} unreadable, " +
+                             $"after {Math.Max(0, iterations)} iteration window");
 
             SetStatus(L10n.T("scan.step.zones"), StatusKind.Busy);
             var profile = CurrentProfile();
@@ -705,6 +766,33 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Is the night-dimming window active? Pure so the setting, the engine and the tests all agree
+    /// on what "night" means, including the wrap past midnight.
+    /// </summary>
+    internal static bool IsNightWindow(int fromHour, int hour)
+    {
+        if (fromHour is < 0 or > 23) return false;
+        if (fromHour == 7) return false;                        // 07:00 -> 07:00 is an empty window
+        if (fromHour < 7) return hour >= fromHour && hour < 7;  // e.g. 03:00 -> 07:00
+        return hour >= fromHour || hour < 7;                    // e.g. 22:00 -> 07:00 (wraps midnight)
+    }
+
+    /// <summary>The global dimmer for right now, night window included.</summary>
+    internal double EffectiveGlobalBrightness()
+    {
+        double b = Math.Clamp(App.Settings.GlobalBrightness, 0, 1);
+        if (IsNightWindow(App.Settings.NightDimFromHour, DateTime.Now.Hour))
+            b *= Math.Clamp(App.Settings.NightBrightness, 0, 1);
+        return b;
+    }
+
+    /// <summary>Pushes the dimmer into a running engine. Safe when nothing is running.</summary>
+    private void PushGlobalBrightness()
+    {
+        try { if (_engine is not null) _engine.GlobalBrightness = EffectiveGlobalBrightness(); } catch { }
+    }
+
     private void StartEngine()
     {
         if (_client is null || _engine is not null) return;
@@ -715,7 +803,11 @@ public partial class MainWindow : Window
         try { _audio = new AudioProvider(); _audio.Start(); }
         catch { _audio = null; _audioFailed = true; }
 
-        _engine = new EffectEngine(_client, _temps, _audio);
+        _engine = new EffectEngine(_client, _temps, _audio)
+        {
+            // The dimmer is an output stage, so it must be in place before the first frame.
+            GlobalBrightness = EffectiveGlobalBrightness(),
+        };
         _engineStatusHandler = m =>
         {
             try
@@ -804,8 +896,60 @@ public partial class MainWindow : Window
         if (running) IcueTxt.Text = L10n.T("icue.text");
     }
 
-    private void CheckSmbus()
+    /// <summary>
+    /// Warns about a SEPARATE OpenRGB the user started themselves. Two engines fight over the SDK
+    /// port and each one's zone resizes undo the other's — a known failure mode (PLAN §7).
+    ///
+    /// Our OWN bundled engine is also called OpenRGB.exe, so it is excluded by path: warning about
+    /// it would be noise on literally every launch. When the path cannot be read (a protected or
+    /// elevated process) we stay quiet rather than risk a false alarm.
+    /// </summary>
+    private void CheckForeignOpenRgb()
     {
+        bool foreign = false;
+        try
+        {
+            string ours = SDK.OpenRgbProcessManager.DefaultExePath();
+            foreach (var p in Process.GetProcessesByName("OpenRGB"))
+            {
+                try
+                {
+                    string? path = p.MainModule?.FileName;
+                    if (path is null) continue;
+                    if (!string.Equals(path, ours, StringComparison.OrdinalIgnoreCase)) { foreign = true; break; }
+                }
+                catch { /* cannot inspect it: assume it is ours, a false alarm is worse */ }
+                finally { try { p.Dispose(); } catch { } }
+            }
+        }
+        catch { }
+        OpenRgbBanner.Visibility = foreign ? Visibility.Visible : Visibility.Collapsed;
+        if (foreign) OpenRgbTxt.Text = L10n.T("openrgb.warn");
+        if (foreign) Diag.AppLog.Warn("a separate OpenRGB.exe is running — it will fight this app for the SDK port");
+    }
+
+    private void CloseOpenRgb_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string ours = SDK.OpenRgbProcessManager.DefaultExePath();
+            foreach (var p in Process.GetProcessesByName("OpenRGB"))
+            {
+                try
+                {
+                    string? path = p.MainModule?.FileName;
+                    if (path is not null && !string.Equals(path, ours, StringComparison.OrdinalIgnoreCase))
+                        p.Kill();
+                }
+                catch { }
+                finally { try { p.Dispose(); } catch { } }
+            }
+        }
+        catch { }
+        CheckForeignOpenRgb();
+    }
+
+    private void CheckSmbus()    {
         // RAM/GPU need SMBus; the engine log tells us whether PawnIO came up.
         bool failed = _mgr?.LastRunHadSmbusFailure() ?? false;
         bool haveDram = _client?.Controllers.Any(c => c.Kind == RgbDeviceType.DRAM) ?? false;
@@ -856,6 +1000,7 @@ public partial class MainWindow : Window
         BuildEffectEditor();
         LoadProfileToUi();
         CheckIcue();
+        CheckForeignOpenRgb();
         CheckSmbus();
         RefreshStatus();
         _tray?.ApplyLanguage();
@@ -895,7 +1040,9 @@ public partial class MainWindow : Window
         if (FxHintTxt is not null) FxHintTxt.Text = L10n.T("effects.hint");
         if (FxFooterTxt is not null) FxFooterTxt.Text = L10n.T("effects.footer");
         if (FxCountTxt is not null) FxCountTxt.Text = L10n.T("effects.count", FxCatalog.Length);
-        if (SaveProfileBtn2 is not null) SaveProfileBtn2.Content = L10n.T("btn.saveToDevices");
+        // "Save to devices" lives in the bottom action bar ONLY. It used to exist twice on the
+        // Lighting page (here and again at the foot of the effect-settings card), which read as
+        // two different actions and cost the card a whole row of height.
         if (DevRescanBtn is not null) DevRescanBtn.Content = L10n.T("btn.rescan");
         if (DevRescanHint is not null) DevRescanHint.Text = L10n.T("dev.rescanHint");
         if (ProfileQuickBtn is not null) ProfileQuickBtn.Content = CurrentProfile().Name;
@@ -903,6 +1050,13 @@ public partial class MainWindow : Window
         UpdateEngineCard();
         IcueTxt.Text = L10n.T("icue.text");
         CloseIcueBtn.Content = L10n.T("icue.close");
+        OpenRgbTxt.Text = L10n.T("openrgb.warn");
+        BetaChk.Content = L10n.T("upd.beta");
+        BetaHint.Text = L10n.T("upd.betaHint");
+        ReduceMotionChk.Content = L10n.T("opt.reduceMotion");
+        GlobalBrightLbl.Text = L10n.T("opt.globalBright");
+        NightDimChk.Content = L10n.T("opt.nightDim");
+        CloseOpenRgbBtn.Content = L10n.T("openrgb.close");
         SmbusTxt.Text = L10n.T("smbus.warn");
         BlackoutBtn.Content = L10n.T("btn.blackout");
         SaveBtn.Content = L10n.T("btn.saveToDevices");
@@ -941,6 +1095,12 @@ public partial class MainWindow : Window
         TimeSchedHdr.Text = L10n.T("ts.title");
         TimeSchedChk.Content = L10n.T("ts.enable");
         TimeSchedHint.Text = L10n.T("ts.hint");
+        HotkeyHdr.Text = L10n.T("hotkey.title");
+        HotkeyHint.Text = L10n.T("hotkey.hint");
+        HotkeyToggleLbl.Text = L10n.T("hotkey.toggle");
+        HotkeyBlackoutLbl.Text = L10n.T("hotkey.blackout");
+        HotkeyNextLbl.Text = L10n.T("hotkey.nextProfile");
+        HotkeyApplyBtn.Content = L10n.T("hotkey.apply");
         FgAddCurrentBtn.Content = L10n.T("fg.addCurrent");
         CompanionHdr.Text = L10n.T("companion.title");
         CompanionChk.Content = L10n.T("companion.enable");
@@ -1273,6 +1433,8 @@ public partial class MainWindow : Window
                 return;
             }
         }
+        // RegisterHotKey holds a system-wide binding: release it before the handle goes away.
+        StopHotkeys();
         base.OnClosing(e);
     }
 

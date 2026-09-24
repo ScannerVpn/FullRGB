@@ -143,6 +143,46 @@ public partial class MainWindow
         foreach (var err in errors)
             panel.Children.Add(Line(L10n.T("hid.badFile", err), "Warn"));
 
+        // Authoring aid: every collection a protocol file COULD address. This is the list someone
+        // needs to start writing one, and the numbers come from the same enumeration the matcher
+        // uses, so they cannot drift. Only vendor pages with a readable report qualify - a standard
+        // keyboard/consumer collection has nothing to write to.
+        var candidates = hid.Where(c => c.UsagePage is >= 0xFF00 and <= 0xFFFF)
+                            .Where(c => c.FeatureLength > 0 || c.OutputLength > 0)
+                            .ToList();
+        if (candidates.Count > 0)
+        {
+            panel.Children.Add(Line(L10n.T("hid.candidates"), "Muted"));
+            foreach (var cand in candidates)
+            {
+                var candRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 3, 0, 0),
+                };
+                candRow.Children.Add(new TextBlock
+                {
+                    Text = $"{cand.VidPid}   usagePage 0x{cand.UsagePage:X4} / usage 0x{cand.Usage:X4}   " +
+                           $"feature {cand.FeatureLength}   output {cand.OutputLength}",
+                    Style = (Style)FindResource("FaintTxt"),
+                    FontSize = 10.5,
+                    VerticalAlignment = VAlign.Center,
+                });
+                var copyBtn = new Button
+                {
+                    Style = (Style)FindResource("Btn"),
+                    Content = L10n.T("hid.copySkeleton"),
+                    FontSize = 10.5,
+                    Margin = new Thickness(10, 0, 0, 0),
+                    Padding = new Thickness(10, 4, 10, 4),
+                };
+                var captured = cand;
+                copyBtn.Click += (_, _) => CopyProtocolSkeleton(captured);
+                candRow.Children.Add(copyBtn);
+                panel.Children.Add(candRow);
+            }
+        }
+
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
         var importBtn = new Button
         {
@@ -344,9 +384,27 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Validates then copies a shared protocol file into the store.</summary>
-    private void ImportCommunityProtocol()
+    /// <summary>
+    /// Puts a ready-to-edit protocol skeleton on the clipboard, pre-filled with the measured
+    /// usagePage/usage/report lengths. Probe-only by construction: a skeleton must never hand
+    /// someone a write section they have not verified against captured traffic themselves.
+    /// </summary>
+    private void CopyProtocolSkeleton(Hid.HidBridge.HidCollection c)
     {
+        try
+        {
+            System.Windows.Clipboard.SetText(Hid.HidBridge.ProtocolSkeleton(c));
+            Diag.AppLog.Info($"protocol skeleton copied for {c.VidPid} usagePage 0x{c.UsagePage:X4}");
+            SetStatus(L10n.T("hid.skeletonCopied", c.VidPid), StatusKind.Ok);
+        }
+        catch (Exception e)
+        {
+            SetStatus(L10n.T("status.failed", e.Message), StatusKind.Error);
+        }
+    }
+
+    /// <summary>Validates then copies a shared protocol file into the store.</summary>
+    private void ImportCommunityProtocol()    {
         try
         {
             var dlg = new System.Windows.Forms.OpenFileDialog { Filter = "Protocol JSON|*.json" };

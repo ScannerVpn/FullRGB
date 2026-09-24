@@ -17,7 +17,10 @@
     <SolidColorBrush x:Key="BorderSoft"  Color="#25232B"/>
     <SolidColorBrush x:Key="Text"        Color="#E0D8EE"/>
     <SolidColorBrush x:Key="Muted"       Color="#98939F"/>
-    <SolidColorBrush x:Key="Faint"       Color="#6B6575"/>
+    <!-- Faint is 10.5px body text, not decoration (device meta lines, hints that carry meaning),
+         so it has to clear WCAG AA 4.5:1 on Card #16161E. The old #6B6575 measured 3.13:1 and
+         failed; #8A8494 measures 4.96:1 and keeps Text > Muted > Faint as a visible hierarchy. -->
+    <SolidColorBrush x:Key="Faint"       Color="#8A8494"/>
     <SolidColorBrush x:Key="Accent"      Color="#A487EF"/>
     <SolidColorBrush x:Key="AccentSoft"  Color="#1AA487EF" Opacity="1"/>
     <SolidColorBrush x:Key="AccentDim"   Color="#281E37"/>

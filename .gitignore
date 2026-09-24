@@ -49,3 +49,10 @@ AppData/
 # Keep vendor but ignore its build temp if any
 vendor/OpenRGB/logs/
 _probe/st_out.txt
+
+# Local-only artifacts: never part of the product, and they made `git status` unreadable.
+# (_probe/ itself stays tracked on purpose - those diagnostic scripts are project assets,
+#  and PLAN.md's rerunnable-commands section points at them.)
+.freebuff/
+.workbuddy-ai/
+previewcost.txt

@@ -55,6 +55,9 @@ public static class AppUpdater
     public const string Repo = "ScannerVpn/FullRGB";
     private const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
 
+    /// <summary>Release LIST for the beta channel: GitHub never labels a pre-release "latest".</summary>
+    private const string ReleasesUrl = "https://api.github.com/repos/" + Repo + "/releases?per_page=30";
+
     /// <summary>Crash-free starts a freshly swapped build must reach before its rollback copy
     /// (FullRGB.exe.old) is allowed to be deleted.</summary>
     public const int RequiredHealthyStarts = 2;
@@ -88,56 +91,73 @@ public static class AppUpdater
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, ApiUrl);
+            // The beta channel asks for the release LIST instead of "latest": GitHub never calls a
+            // pre-release "latest", so listing is the only way to opt into one. This is the safety
+            // valve for shipping a risky change — round 21's HID code reached every user at once
+            // because there was no earlier ring to catch it.
+            bool beta = App.Settings.UpdateBetaChannel;
+            using var req = new HttpRequestMessage(HttpMethod.Get, beta ? ReleasesUrl : ApiUrl);
             req.Headers.UserAgent.ParseAdd("FullRGB-update-check");
             req.Headers.Accept.ParseAdd("application/vnd.github+json");
             using var resp = await Http.SendAsync(req).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             string json = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
 
-            string tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() ?? "" : "";
-            string notes = root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
-            string html = root.TryGetProperty("html_url", out var htmlEl) ? htmlEl.GetString() ?? "" : "";
-            string published = root.TryGetProperty("published_at", out var pubEl) ? pubEl.GetString() ?? "" : "";
-
-            if (!IsNewer(CurrentVersion(), tag.TrimStart('v', 'V'))) return null;
-
-            string? assetUrl = null;
-            long assetSize = 0;
-            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
-                foreach (var a in assets.EnumerateArray())
+                UpdateInfo? newest = null;
+                foreach (var rel in doc.RootElement.EnumerateArray())
                 {
-                    string name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    if (!name.Equals("FullRGB.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    assetUrl = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
-                    assetSize = a.TryGetProperty("size", out var s) && s.TryGetInt64(out var l) ? l : 0;
-                    break;
+                    if (rel.TryGetProperty("draft", out var draftEl) && draftEl.GetBoolean()) continue;
+                    var candidate = FromRelease(rel);
+                    if (candidate is null) continue;
+                    if (newest is null || IsNewer(newest.Version, candidate.Version)) newest = candidate;
                 }
+                return newest;
             }
-            if (string.IsNullOrEmpty(assetUrl))
-            {
-                // Fallback: the legacy "source exe attached to the release body" layout is not
-                // supported — a release without the exe asset simply means "no update offered".
-                return null;
-            }
-            var info = new UpdateInfo
-            {
-                Version = tag.TrimStart('v', 'V'),
-                Notes = notes.Length > 4000 ? notes[..4000] + "…" : notes,
-                AssetUrl = assetUrl,
-                HtmlUrl = html,
-                PublishedAt = published,
-            };
-            return info;
+            return FromRelease(doc.RootElement);
         }
         catch (Exception e)
         {
             Diag.AppLog.Warn("update check failed: " + e.Message);
             return null;
         }
+    }
+
+    /// <summary>One release object → UpdateInfo, or null when it is not newer or has no usable asset.</summary>
+    private static UpdateInfo? FromRelease(JsonElement root)
+    {
+        string tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() ?? "" : "";
+        string version = tag.TrimStart('v', 'V');
+        if (!IsNewer(CurrentVersion(), version)) return null;
+
+        string? assetUrl = null;
+        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var a in assets.EnumerateArray())
+            {
+                string name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                if (!name.Equals("FullRGB.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                assetUrl = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                break;
+            }
+        }
+        // A release without the exe asset means "no update offered": the legacy "source exe attached
+        // to the release body" layout is not supported.
+        if (string.IsNullOrEmpty(assetUrl)) return null;
+
+        string notes = root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
+        string html = root.TryGetProperty("html_url", out var htmlEl) ? htmlEl.GetString() ?? "" : "";
+        string published = root.TryGetProperty("published_at", out var pubEl) ? pubEl.GetString() ?? "" : "";
+        return new UpdateInfo
+        {
+            Version = version,
+            Notes = notes.Length > 4000 ? notes[..4000] + "…" : notes,
+            AssetUrl = assetUrl,
+            HtmlUrl = html,
+            PublishedAt = published,
+        };
     }
 
     /// <summary>Numeric compare "1.6.0" vs "1.5.1"; any non-numeric suffix (rc1, beta) is ignored.
@@ -216,6 +236,48 @@ public static class AppUpdater
     }
 
     // ------------------------------------------------------------------ apply / cleanup
+
+    /// <summary>
+    /// Rolls back a freshly swapped build that never reached a single clean start.
+    ///
+    /// The signature: a rollback marker exists, it has recorded ZERO clean starts, the .old copy is
+    /// still on disk, and the previous run did not exit cleanly. Together those mean the build we
+    /// swapped in cannot start — which is exactly the case that used to leave the user with a
+    /// bricked install and only a manual file rename as a way out.
+    ///
+    /// Must run BEFORE <see cref="CleanupStale"/> (which would delete the rollback copy) and before
+    /// <see cref="SessionMarker.Begin"/> (which overwrites the previous run's state).
+    /// </summary>
+    public static bool TryRollbackBrokenUpdate(out string note)
+    {
+        note = "";
+        try
+        {
+            var health = ReadHealthMarker();
+            if (health is null || health.Starts > 0) return false;   // no swap, or it already started cleanly
+            if (!File.Exists(health.Old)) return false;
+            if (!Diag.SessionMarker.WasPreviousRunUnclean()) return false;
+
+            string exe = Environment.ProcessPath ?? "";
+            if (exe.Length == 0 || !File.Exists(exe)) return false;
+
+            // Keep the broken build: it is the only artefact that can explain what went wrong, and
+            // the user may want to attach it to a bug report.
+            string broken = exe + ".failed";
+            TryDelete(broken);
+            File.Move(exe, broken);
+            File.Move(health.Old, exe, true);
+            TryDelete(HealthMarkerPath);
+            note = $"the update never started cleanly — rolled back (broken build kept at {Path.GetFileName(broken)})";
+            Diag.AppLog.Warn("update rollback: " + note);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Diag.AppLog.Warn("update rollback failed: " + e.Message);
+            return false;
+        }
+    }
 
     /// <summary>Is a verified update waiting to be swapped in?</summary>
     public static PendingUpdate? ReadPending()

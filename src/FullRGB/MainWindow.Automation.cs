@@ -388,6 +388,32 @@ public partial class MainWindow : IControlTarget
         _lastTimeSchedProfile = null;
     }
 
+    /// <summary>
+    /// Saves and re-binds the system-wide hotkeys. Re-binding rather than merging means an emptied
+    /// box actually releases the key, which is the only way to undo a bad binding.
+    /// </summary>
+    private void HotkeyApply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        try
+        {
+            App.Settings.HotkeyToggleEffects = (HotkeyToggleBox.Text ?? "").Trim();
+            App.Settings.HotkeyBlackout = (HotkeyBlackoutBox.Text ?? "").Trim();
+            App.Settings.HotkeyNextProfile = (HotkeyNextBox.Text ?? "").Trim();
+            // Echo the accepted combos back: a typo would otherwise look like a working shortcut.
+            HotkeyToggleBox.Text = App.Settings.HotkeyToggleEffects;
+            HotkeyBlackoutBox.Text = App.Settings.HotkeyBlackout;
+            HotkeyNextBox.Text = App.Settings.HotkeyNextProfile;
+            ProfileStore.Save(App.Settings);
+            ApplyHotkeys();
+            SetStatus(L10n.T("hotkey.applied"), StatusKind.Ok);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(L10n.T("status.failed", ex.Message), StatusKind.Error);
+        }
+    }
+
     // ---------------------------------------------------------------- safe mode
 
     /// <summary>Records one full engine replacement; 3 within 10 minutes trip safe mode.</summary>
@@ -538,6 +564,7 @@ public partial class MainWindow : IControlTarget
     {
         if (UpdateTxt is null) return;
         UpdateChk.IsChecked = App.Settings.AutoUpdateEnabled;
+        BetaChk.IsChecked = App.Settings.UpdateBetaChannel;
         UpdateTxt.Text = string.Format(L10n.T("update.version"), Update.AppUpdater.CurrentVersion())
                          + "\n" + (_updateInfo is null
                              ? L10n.T("update.uptodate")
@@ -554,7 +581,13 @@ public partial class MainWindow : IControlTarget
     {
         if (_loadingUi) return;
         App.Settings.AutoUpdateEnabled = UpdateChk.IsChecked == true;
+        // Switching channel invalidates the cached offer: a beta build must not keep showing the
+        // stable one (or vice versa) until the next 24 h check.
+        bool beta = BetaChk.IsChecked == true;
+        if (beta != App.Settings.UpdateBetaChannel) _updateInfo = null;
+        App.Settings.UpdateBetaChannel = beta;
         ProfileStore.Save(App.Settings);
+        RefreshUpdateCard();
     }
 
     private async void UpdateCheck_Click(object sender, RoutedEventArgs e)

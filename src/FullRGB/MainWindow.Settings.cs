@@ -167,10 +167,17 @@ public partial class MainWindow
         AutoFxChk.IsChecked = App.Settings.AutoStartEffects;
         CloseEngineChk.IsChecked = App.Settings.CloseEngineOnExit;
         AutoRecoverChk.IsChecked = App.Settings.AutoRecoverLighting;
+        ReduceMotionChk.IsChecked = App.Settings.ReduceMotion;
+        GlobalBrightSlider.Value = Math.Clamp(App.Settings.GlobalBrightness, 0.1, 1);
+        GlobalBrightVal.Text = $"{App.Settings.GlobalBrightness * 100:F0}%";
+        NightDimChk.IsChecked = App.Settings.NightDimFromHour >= 0;
         SchedChk.IsChecked = App.Settings.SchedulerEnabled;
         BuildSchedMinutes();
         TimeSchedChk.IsChecked = App.Settings.TimeScheduleEnabled;
         TimeSchedBox.Text = App.Settings.TimeScheduleRules;
+        HotkeyToggleBox.Text = App.Settings.HotkeyToggleEffects;
+        HotkeyBlackoutBox.Text = App.Settings.HotkeyBlackout;
+        HotkeyNextBox.Text = App.Settings.HotkeyNextProfile;
         FgChk.IsChecked = App.Settings.ForegroundEnabled;
         FgMapBox.Text = string.Join("\n", App.Settings.ForegroundMap.Select(kv => $"{kv.Key}={kv.Value}"));
         CompanionChk.IsChecked = App.Settings.CompanionEnabled;
@@ -556,6 +563,35 @@ public partial class MainWindow
         if (_loadingUi) return;
         App.Settings.AutoRecoverLighting = AutoRecoverChk.IsChecked == true;
         ProfileStore.Save(App.Settings);
+    }
+
+    /// <summary>
+    /// Master dimmer. ValueChanged fires during XAML load too, hence the guard: writing settings
+    /// from a half-built window would save defaults over the user's file.
+    /// </summary>
+    private void GlobalBright_Changed(object sender, System.Windows.RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loadingUi || GlobalBrightVal is null) return;
+        App.Settings.GlobalBrightness = Math.Clamp(GlobalBrightSlider.Value, 0.1, 1);
+        GlobalBrightVal.Text = $"{App.Settings.GlobalBrightness * 100:F0}%";
+        ProfileStore.Save(App.Settings);
+        PushGlobalBrightness();
+    }
+
+    private void NightDim_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.NightDimFromHour = NightDimChk.IsChecked == true ? 22 : -1;
+        ProfileStore.Save(App.Settings);
+        PushGlobalBrightness();
+    }
+
+    private void ReduceMotion_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        App.Settings.ReduceMotion = ReduceMotionChk.IsChecked == true;
+        ProfileStore.Save(App.Settings);
+        ApplyReduceMotion();
     }
 
     // ---------- rotation scheduler ----------

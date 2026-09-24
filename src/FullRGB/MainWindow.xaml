@@ -35,7 +35,7 @@
       <!-- ═══ topbar (arena: 70px, #111115) ═══ -->
       <Grid Grid.Row="0" Height="70" Background="#111115">
         <Border BorderBrush="#25242C" BorderThickness="0,0,0,1"/>
-        <Grid x:Name="TopbarFlow" Margin="28,0,120,0">
+        <Grid x:Name="TopbarFlow" Margin="28,0,28,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
@@ -74,18 +74,6 @@
                   Margin="10,0,0,0" Padding="10,6" MinWidth="40"
                   shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
         </Grid>
-
-        <!-- caption controls — always physical top-right -->
-        <StackPanel FlowDirection="LeftToRight" Orientation="Horizontal"
-                    VerticalAlignment="Top" HorizontalAlignment="Right" Margin="0,4,4,0"
-                    shell:WindowChrome.IsHitTestVisibleInChrome="True">
-          <Button x:Name="MinBtn" Style="{StaticResource CaptionBtn}" Click="Min_Click"
-                  Content="&#xE921;"/>
-          <Button x:Name="MaxBtn" Style="{StaticResource CaptionBtn}" Click="Max_Click"
-                  Content="&#xE922;"/>
-          <Button x:Name="CloseBtn2" Style="{StaticResource CloseBtn}" Click="CloseWin_Click"
-                  Content="&#xE8BB;"/>
-        </StackPanel>
       </Grid>
 
       <!-- ═══ banners ═══ -->
@@ -105,6 +93,25 @@
                        Foreground="{StaticResource Warn}" VerticalAlignment="Center"/>
             <Button x:Name="CloseIcueBtn" Grid.Column="2" Style="{StaticResource Btn}" Click="CloseIcue_Click"
                     Margin="10,0,0,0" Foreground="{StaticResource Warn}" FontSize="11"/>
+          </Grid>
+        </Border>
+
+        <Border x:Name="OpenRgbBanner" Background="{StaticResource WarnBg}" CornerRadius="10"
+                Padding="13,10" Margin="0,14,0,8" Visibility="Collapsed"
+                BorderBrush="#3A2F16" BorderThickness="1">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                       Foreground="{StaticResource Warn}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <TextBlock x:Name="OpenRgbTxt" Grid.Column="1" TextWrapping="Wrap" FontSize="11.5"
+                       Foreground="{StaticResource Warn}" VerticalAlignment="Center"/>
+            <Button x:Name="CloseOpenRgbBtn" Grid.Column="2" Style="{StaticResource Btn}"
+                    Click="CloseOpenRgb_Click" Margin="10,0,0,0"
+                    Foreground="{StaticResource Warn}" FontSize="11"/>
           </Grid>
         </Border>
 
@@ -236,7 +243,6 @@
                 <Grid.RowDefinitions>
                   <RowDefinition Height="52"/>
                   <RowDefinition Height="*"/>
-                  <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid Grid.Row="0" Margin="16,0">
                   <Border BorderBrush="#29252F" BorderThickness="0,0,0,1" VerticalAlignment="Bottom" Margin="0,0,0,-1"/>
@@ -248,12 +254,9 @@
                                VerticalAlignment="Center"/>
                   </StackPanel>
                 </Grid>
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="16,8,16,0">
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="16,8,16,14">
                   <StackPanel x:Name="EffectParams"/>
                 </ScrollViewer>
-                <Button x:Name="SaveProfileBtn2" Grid.Row="2" Click="SaveProfile_Click"
-                        HorizontalAlignment="Stretch" Margin="16,10,16,14" Height="34"
-                        Style="{StaticResource SaveProfileBtnStyle}"/>
               </Grid>
             </Border>
           </Grid>
@@ -461,6 +464,23 @@
                             Checked="CloseEngine_Changed" Unchecked="CloseEngine_Changed"/>
                   <CheckBox x:Name="AutoRecoverChk" Style="{StaticResource Chk}" Margin="0,8,0,0"
                             Checked="AutoRecover_Changed" Unchecked="AutoRecover_Changed"/>
+                  <CheckBox x:Name="ReduceMotionChk" Style="{StaticResource Chk}" Margin="0,8,0,0"
+                            Checked="ReduceMotion_Changed" Unchecked="ReduceMotion_Changed"/>
+                  <Grid Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="GlobalBrightLbl" Style="{StaticResource MutedTxt}"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="GlobalBrightVal" Grid.Column="1" Style="{StaticResource FaintTxt}"
+                               VerticalAlignment="Center" MinWidth="38" TextAlignment="Right"/>
+                  </Grid>
+                  <Slider x:Name="GlobalBrightSlider" Style="{StaticResource Slider}"
+                          Minimum="0.1" Maximum="1" Value="1" Margin="0,6,0,0"
+                          ValueChanged="GlobalBright_Changed"/>
+                  <CheckBox x:Name="NightDimChk" Style="{StaticResource Chk}" Margin="0,10,0,0"
+                            Checked="NightDim_Changed" Unchecked="NightDim_Changed"/>
                 </StackPanel>
               </Border>
 
@@ -492,6 +512,43 @@
                   <TextBox x:Name="TimeSchedBox" Style="{StaticResource Inp}" AcceptsReturn="True"
                            Height="70" VerticalScrollBarVisibility="Auto" LostFocus="TimeSched_Save"
                            FontFamily="Consolas"/>
+                </StackPanel>
+              </Border>
+
+              <Border Style="{StaticResource CardBd}" Margin="0,0,0,12">
+                <StackPanel>
+                  <TextBlock x:Name="HotkeyHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
+                  <TextBlock x:Name="HotkeyHint" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             Margin="0,0,0,10"/>
+                  <Grid Margin="0,0,0,7">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="190"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="HotkeyToggleLbl" Style="{StaticResource MutedTxt}"
+                               VerticalAlignment="Center"/>
+                    <TextBox x:Name="HotkeyToggleBox" Grid.Column="1" Style="{StaticResource Inp}"/>
+                  </Grid>
+                  <Grid Margin="0,0,0,7">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="190"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="HotkeyBlackoutLbl" Style="{StaticResource MutedTxt}"
+                               VerticalAlignment="Center"/>
+                    <TextBox x:Name="HotkeyBlackoutBox" Grid.Column="1" Style="{StaticResource Inp}"/>
+                  </Grid>
+                  <Grid Margin="0,0,0,11">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="190"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="HotkeyNextLbl" Style="{StaticResource MutedTxt}"
+                               VerticalAlignment="Center"/>
+                    <TextBox x:Name="HotkeyNextBox" Grid.Column="1" Style="{StaticResource Inp}"/>
+                  </Grid>
+                  <Button x:Name="HotkeyApplyBtn" Style="{StaticResource Btn}"
+                          HorizontalAlignment="Left" Click="HotkeyApply_Click"/>
                 </StackPanel>
               </Border>
 
@@ -534,6 +591,10 @@
                   <TextBlock x:Name="UpdateHdr" Style="{StaticResource SectionHdr}" Margin="0,0,0,11"/>
                   <CheckBox x:Name="UpdateChk" Style="{StaticResource Chk}"
                             Checked="Update_Changed" Unchecked="Update_Changed"/>
+                  <CheckBox x:Name="BetaChk" Style="{StaticResource Chk}" Margin="0,7,0,0"
+                            Checked="Update_Changed" Unchecked="Update_Changed"/>
+                  <TextBlock x:Name="BetaHint" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
+                             Margin="0,6,0,0"/>
                   <TextBlock x:Name="UpdateTxt" Style="{StaticResource FaintTxt}" TextWrapping="Wrap"
                              Margin="0,9,0,0"/>
                   <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -619,7 +680,27 @@
 
     <!-- ══════════════════ SIDEBAR (always physical right) ══════════════════ -->
     <Border Grid.Column="1" Background="#121217" BorderBrush="#27252E" BorderThickness="1,0,0,0">
-      <Grid x:Name="SidebarFlow" Margin="20,28,20,16">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>  <!-- caption controls -->
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Caption controls live in the rail, above the brand. They used to float in the content
+             area's top bar, right where the rail begins, which left a visible seam and made the
+             rail read as a panel bolted onto the side of the window instead of part of it. -->
+        <StackPanel Grid.Row="0" FlowDirection="LeftToRight" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,6,6,0"
+                    shell:WindowChrome.IsHitTestVisibleInChrome="True">
+          <Button x:Name="MinBtn" Style="{StaticResource CaptionBtn}" Click="Min_Click"
+                  Content="&#xE921;"/>
+          <Button x:Name="MaxBtn" Style="{StaticResource CaptionBtn}" Click="Max_Click"
+                  Content="&#xE922;"/>
+          <Button x:Name="CloseBtn2" Style="{StaticResource CloseBtn}" Click="CloseWin_Click"
+                  Content="&#xE8BB;"/>
+        </StackPanel>
+
+        <Grid x:Name="SidebarFlow" Grid.Row="1" Margin="20,10,20,16">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>  <!-- brand -->
           <RowDefinition Height="Auto"/>  <!-- nav -->
@@ -716,6 +797,7 @@
             </StackPanel>
           </StackPanel>
         </Border>
+        </Grid>
       </Grid>
     </Border>
   </Grid>
