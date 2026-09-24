@@ -3,6 +3,87 @@
 All notable changes to FullRGB are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semver.
 
+## [1.7.0] — 2026-09-24 — Round 22: the music follows the song, and lighting survives hibernate
+
+### Fixed — the music effects never actually followed the music
+
+Four reports ("the lights do not match the song", "bass is not in sync", "it pulses on its own",
+"in many parts of the song the lights just sit there") were three separate defects, all of the same
+shape: a value that was available but never consulted, or consulted against the wrong reference.
+
+- **The beat detector compared against the wrong value.** `_bass` was updated *first* and the onset
+  test then read it, so the reference already contained half of the new sample. Only extreme jumps
+  could register and ordinary kick drums were silently missed.
+- **The level meter was linear with a ×4 gain.** It hit full scale at RMS 0.25, so every louder
+  passage looked identical. Now dB-mapped (−55..−5 dB).
+- **The `pulse` shape was driven by a clock.** It derived its whole look from a free-running ~2.4 s
+  sine while `ctx.Beat` — already computed by the provider — was never read on that path.
+- **The per-band value was normalised against a decaying peak**, which pinned any steady signal at
+  1.000 (a 6 dB drop only reached 0.75). A chorus held the strip at full brightness and every
+  quiet/loud contrast vanished. It is now measured against a slow baseline: the baseline reads
+  0.571, a hit reaches 1.0, 6 dB below falls to 0.285.
+
+### Changed — the music effect picks its own band
+
+- **The "Reacts to" selector is gone.** A fixed band only works for some music — "bass" does
+  nothing on an acoustic track, "treble" nothing on hip-hop — so it had to be re-picked per song.
+  The provider now scores how *rhythmic* each band is: movement relative to the band's own mean,
+  which stops a loud bass line from winning on volume alone, with a floor for bands that have no
+  content in that track, ~1 s means so the choice follows the track rather than one hit, and 25 %
+  hysteresis so two similar bands cannot trade places mid-song.
+- Onset detection follows the winning band. Watching only the bass meant a kick-less track never
+  produced a beat at all.
+- A profile saved with a manual band is coerced to auto, so an old file cannot pin the effect to a
+  band that is silent in the current track.
+- The UI shows a live readout of the chosen band, so the automatic choice is observable.
+
+### Fixed — lighting after hibernate
+
+- **The app no longer stays wedged after hibernate.** `DeviceParser` flags a *truncated* controller
+  payload as `ParseFailed`, and that is exactly what the engine returns while its USB/SMBus layer is
+  still coming back. But the connect settle loop only counted *controllers*, so "4 controllers,
+  stable" was declared a healthy session, zone expansion did nothing, and every retry hit the same
+  wall. The loop now also requires zero unreadable controllers and waits longer once it has seen
+  truncated replies.
+- **The whole resume path was unlogged**, so a failed wake-up left nothing to diagnose from. Power
+  events, the heartbeat gap detection, the settle outcome and every recovery attempt now log device
+  counts.
+
+### Added
+
+- **Global hotkeys** — toggle effects, blackout, next profile, from any foreground app.
+- **`--hid-list`** — prints every HID collection (VID:PID, usagePage, usage, report lengths), and
+  `--hid-list=json` emits a probe skeleton. This is the data a community protocol author needs and
+  nothing in the app reported it. The Hardware page can copy a skeleton for any candidate device.
+- **`--audiotest[=seconds]`** — live audio readout (level, bands, the auto pick, the beat envelope),
+  printed and written to the app log.
+- **Master brightness** with an automatic night window (22:00–07:00).
+- **Beta update channel** — pre-releases are offered when enabled. GitHub never labels a
+  pre-release "latest", so this asks for the release list instead.
+- **Reduce motion** — freezes the preview strip.
+- **Automatic rollback** — a swapped build that never completes a single clean start is replaced by
+  the previous one, with the broken build kept for a bug report.
+- **Unclean-exit detection** — the next launch reports that the previous session ended
+  unexpectedly. The 1.6.0 Hardware crash left no trace anywhere, which is why it shipped.
+- **A warning when a separate OpenRGB is running**, since two engines fight over the SDK port.
+
+### Accessibility
+
+- **`Faint` failed WCAG AA.** It measured 3.13:1 on the card background while being 10.5 px text
+  that carries meaning (device meta lines, hints). Now 4.97:1.
+
+### Removed
+
+- The duplicate in-panel "Save to devices" button (the persistent bottom bar keeps the only one).
+- The trailing period on the Lighting headline, which rendered as "life..." next to the decorative
+  accent dot.
+
+### Repository
+
+- **`installer/FullRGB.iss` had never been committed** — `.gitignore` ignores `installer/Output/`,
+  i.e. the script is meant to be tracked, so nobody cloning the repo could build the installer.
+- Removed 71 MB of build output in folders named by a malformed command.
+
 ## [1.6.1] — 2026-09-23 — Round 22: the Hardware-tab crash, and docs that matched the code
 
 ### Fixed — crash
