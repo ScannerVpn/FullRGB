@@ -82,6 +82,12 @@ public sealed class EffectEngine : IDisposable
     public long FramesSent => Interlocked.Read(ref _framesSent);
 
     /// <summary>
+    /// Master dimmer applied to every zone AFTER calibration (1.0 = unchanged). A property rather
+    /// than a read of App.Settings so the engine stays usable headless in tests.
+    /// </summary>
+    public double GlobalBrightness { get; set; } = 1.0;
+
+    /// <summary>
     /// Worst device's RENDER rate — the honest number for a status line, because an average
     /// across a stalled device and a fast one would hide the stall.
     /// </summary>
@@ -349,6 +355,7 @@ public sealed class EffectEngine : IDisposable
                         AudioBass = _audio?.Bass ?? 0,
                         AudioMid = _audio?.Mid ?? 0,
                         AudioTreble = _audio?.Treble ?? 0,
+                        AudioAuto = _audio?.AutoLevel ?? 0,
                         Beat = _audio?.Beat ?? 0,
                     };
                     ctx.ScreenValid = _audio is not null && _audio.FillScreenContext(ctx);
@@ -514,6 +521,7 @@ public sealed class EffectEngine : IDisposable
             double t0 = clock.Elapsed.TotalMilliseconds;
             var rgb = EffectRenderer.Render(eff, n, seed, ctx, audioState);
             profile.CalibrationFor(dev, zone).Apply(rgb);
+            ApplyGlobalBrightness(rgb);
             renderMs += clock.Elapsed.TotalMilliseconds - t0;
 
             string key = $"{dev.Index}:{zone.Index}";
@@ -571,6 +579,19 @@ public sealed class EffectEngine : IDisposable
     /// <summary>Recovery is only attempted on real failures, never while stopping.</summary>
     internal static bool ShouldAttemptRecovery(int consecutiveFailures, bool cancellationRequested)
         => !cancellationRequested && (consecutiveFailures is 1 or 5 or 20);
+
+    /// <summary>
+    /// Scales a finished frame by the master dimmer. Applied last (after calibration) so the dimmer
+    /// is a single honest output stage rather than one more gain buried in the per-effect maths.
+    /// </summary>
+    private void ApplyGlobalBrightness(byte[] rgb)
+    {
+        double k = GlobalBrightness;
+        if (k >= 0.999) return;          // the common case: no extra pass over the buffer
+        if (k < 0 || double.IsNaN(k)) k = 0;
+        for (int i = 0; i < rgb.Length; i++)
+            rgb[i] = (byte)Math.Round(rgb[i] * k);
+    }
 
     private static ulong Hash(byte[] rgb)
     {

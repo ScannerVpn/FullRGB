@@ -86,7 +86,10 @@ public sealed class EffectDef
         TempSensor = TempSensor == "gpu" ? "gpu" : "cpu";
         CustomPixels ??= "FF0000,00FF00,0000FF";
         Direction = Direction == "reverse" ? "reverse" : "forward";
-        AudioBand = AudioBand is "bass" or "mid" or "treble" or "level" ? AudioBand : "level";
+        // The manual band selector is gone (see EffectRenderer.BandValue): every profile follows
+        // the provider's automatic choice, so an old saved "bass" cannot pin the effect to a band
+        // that is silent in the track the user is playing.
+        AudioBand = "auto";
         if (double.IsNaN(AudioGain) || AudioGain < 0.2) AudioGain = 0.2;
         if (AudioGain > 2.5) AudioGain = 2.5;
         if (double.IsNaN(BeatStrength) || BeatStrength < 0) BeatStrength = 0;
@@ -116,6 +119,8 @@ public sealed class EffectContext
     public double? GpuTemp;
     public double AudioLevel;      // 0..1 overall
     public double AudioBass, AudioMid, AudioTreble; // 0..1 bands
+    /// <summary>Level of the band the provider's auto detector picked (see AudioBand "auto").</summary>
+    public double AudioAuto;
     public double Beat;            // 0..1 kick onset envelope
 
     // Screen sampling: three horizontal bands (top/middle/bottom of the display), each the
@@ -402,15 +407,23 @@ public static class EffectRenderer
                 }
                 if (e.AudioMode == "pulse")
                 {
-                    // Whole strip breathes with the music. OLD BUG the user reported as
-                    // "constant pink instead of blue and red": pulse sampled the colouring at
-                    // ONE point (pos 0.5) — the midpoint of a red↔blue gradient, which IS pink,
-                    // frozen there for the whole strip. Now the pulse Travels through the
-                    // colouring (period ~2.4 s at default speed) so both picked colours show,
-                    // and the chosen colour still tracks the beat intensity.
+                    // Whole strip flashes WITH the music. The flash is driven by the provider's
+                    // onset envelope (ctx.Beat: jumps to 1 on a kick/bass hit, decays over
+                    // ~200 ms) instead of a clock.
+                    //
+                    // The old code derived the entire look from a free-running ~2.4 s sine, so the
+                    // strip "pulsed on its own" no matter what was playing — the exact complaint.
+                    // ctx.Beat was computed by the provider but never used here, so nothing could
+                    // ever line up with a drum.
+                    //
+                    // The band level still sets a floor, so quiet passages stay dim and
+                    // non-percussive music (strings, pads) still breathes rather than sitting dark.
+                    double beat = Math.Clamp(ctx.Beat, 0, 1);
+                    double k = Math.Clamp(0.10 + 0.45 * level + 0.60 * beat, 0, 1);
+                    // The colour still travels so both picked colours show (period ~2.4 s at
+                    // default speed), but it is no longer the source of the pulse.
                     double travel = 0.5 + 0.5 * Math.Sin(2 * Math.PI * ctx.Time * Math.Max(0.2, speed) * 0.4);
                     var (r, g, b) = colorAt(travel, level);
-                    double k = 0.2 + 0.8 * level;
                     Fill(rgb, Scale(r, k), Scale(g, k), Scale(b, k));
                 }
                 else if (e.AudioMode == "mirror")
@@ -719,13 +732,22 @@ public static class EffectRenderer
         };
     }
 
-    /// <summary>Which audio figure the music effect follows.</summary>
+    /// <summary>
+    /// Which audio figure the music effect follows.
+    ///
+    /// "auto" (the default, and what every profile is coerced to) is the provider's own choice of
+    /// the band currently carrying the rhythm. The manual selector was removed because a fixed band
+    /// only works for some music: "bass" does nothing on an acoustic track, "treble" nothing on
+    /// hip-hop, so the user had to re-pick per song. Unknown values fall back to auto rather than to
+    /// a fixed band, so a stale saved profile cannot resurrect the fiddly behaviour.
+    /// </summary>
     public static double BandValue(string band, EffectContext ctx) => band switch
     {
         "bass" => ctx.AudioBass,
         "mid" => ctx.AudioMid,
         "treble" => ctx.AudioTreble,
-        _ => ctx.AudioLevel,
+        "level" => ctx.AudioLevel,
+        _ => ctx.AudioAuto,
     };
 
     /// <summary>Adds a white kick-flash over the whole frame (music effects only).</summary>

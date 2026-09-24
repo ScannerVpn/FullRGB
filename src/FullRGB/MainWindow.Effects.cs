@@ -630,6 +630,9 @@ public partial class MainWindow
     private void BuildParams()
     {
         EffectParams.Children.Clear();
+        // Drop the reference: the old readout is detached now, and TickPreview must not keep
+        // writing into a dead TextBlock when the selected effect is not the music one.
+        _bandReadout = null;
 
         // Preset gallery: one click fills the colours + the palette (proper nouns, no l10n needed).
         // Shows the preset the current colours match, or nothing when customised.
@@ -696,11 +699,17 @@ public partial class MainWindow
 
         if (_edit.Type == EffectType.AudioVU)
         {
-            var bands = new[] { "level", "bass", "mid", "treble" };
-            var cmb = Combo(new[] { L10n.T("band.level"), L10n.T("band.bass"), L10n.T("band.mid"), L10n.T("band.treble") },
-                            Math.Max(0, Array.IndexOf(bands, _edit.AudioBand)),
-                            i => { _edit.AudioBand = bands[Math.Clamp(i, 0, 3)]; PushEdit(); });
-            AddRow(L10n.T("lbl.band"), cmb);
+            // No band selector any more. A fixed band only ever worked for some music - "bass" does
+            // nothing on an acoustic track, "treble" nothing on hip-hop - so it had to be re-picked
+            // per song. The provider now scores how rhythmic each band is and follows the winner
+            // (AudioProvider.Analyse). This readout shows what it picked so the choice is visible
+            // rather than a black box; it is refreshed live from TickPreview.
+            _bandReadout = new TextBlock
+            {
+                Style = (Style)FindResource("FaintTxt"),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            AddRow(L10n.T("lbl.band"), _bandReadout);
 
             var modes = new[] { "bar", "mirror", "pulse", "dots" };
             var modeCmb = Combo(new[] { L10n.T("mode.bar"), L10n.T("mode.mirror"), L10n.T("mode.pulse"), L10n.T("mode.dots") },
@@ -1020,6 +1029,18 @@ public partial class MainWindow
     /// uses, so the preview can never disagree with the hardware. One timer for the whole
     /// window lifetime (the old code created a new one on every editor rebuild).
     /// </summary>
+    /// <summary>Applies the reduce-motion preference to a running preview, live.</summary>
+    private void ApplyReduceMotion()
+    {
+        if (App.Settings.ReduceMotion)
+        {
+            _previewTimer?.Stop();
+            _previewTimer = null;
+            TickPreview();      // leave a current still frame, not a stale one
+        }
+        else StartPreview();
+    }
+
     private void StartPreview()
     {
         if (_previewTimer is not null) return;
@@ -1027,6 +1048,15 @@ public partial class MainWindow
         _previewPixels = new byte[PreviewLeds * PreviewRows * 4];
         PreviewImg.Source = _previewBmp;
         RenderOptions.SetBitmapScalingMode(PreviewImg, BitmapScalingMode.Linear);
+
+        // Reduce-motion: draw ONE frame so the strip still shows what the effect looks like, then
+        // leave it static. A 128-LED strip animating at 20 fps in the corner of the eye is exactly
+        // the motion this setting exists to stop (and it costs battery on a laptop).
+        if (App.Settings.ReduceMotion)
+        {
+            TickPreview();
+            return;
+        }
 
         _previewTimer = new System.Windows.Threading.DispatcherTimer
         {
@@ -1042,10 +1072,19 @@ public partial class MainWindow
         _previewTimer = null;
     }
 
+    /// <summary>Live readout of the band the auto detector is following (null when not built).</summary>
+    private TextBlock? _bandReadout;
+
     private void TickPreview()
     {
         if (_previewBmp is null || _previewPixels is null) return;
         if (!IsVisible) return;   // hidden in tray: don't burn CPU
+
+        // Live "which band is it following" readout, so the automatic choice is observable.
+        if (_bandReadout is not null)
+            _bandReadout.Text = _audio is null
+                ? L10n.T("band.none")
+                : L10n.T("band.auto", L10n.T("band." + Sensors.AudioProvider.BandName(_audio.AutoBandIndex)));
 
         var ctx = new EffectContext
         {
@@ -1056,6 +1095,7 @@ public partial class MainWindow
             AudioBass = _audio?.Bass ?? 0,
             AudioMid = _audio?.Mid ?? 0,
             AudioTreble = _audio?.Treble ?? 0,
+            AudioAuto = _audio?.AutoLevel ?? 0,
             Beat = _audio?.Beat ?? 0,
         };
         ctx.ScreenValid = _audio is not null && _audio.FillScreenContext(ctx);

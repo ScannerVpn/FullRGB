@@ -135,6 +135,20 @@ public static class RenderTests
         Check("audio: 32-bit stereo stride", Sensors.AudioProvider.GetSampleStride(new NAudio.Wave.WaveFormat(44100, 32, 2)) == 8);
         Check("audio: 16-bit mono stride", Sensors.AudioProvider.GetSampleStride(new NAudio.Wave.WaveFormat(44100, 16, 1)) == 2);
 
+        // ---- 10b. round 22 fix: the level meter must be dB-mapped, not linear ----
+        // The old "rms * 4.0" reached full scale at RMS 0.25, so every louder passage looked
+        // identical — the "volume does not follow the song" report. A dB mapping keeps rising
+        // past that point, which is what makes quiet and loud passages distinguishable.
+        double Lvl(double rms) => Sensors.AudioProvider.ToUnit(rms, -55, -5);
+        Check("audio: silence maps to zero", Lvl(0) == 0);
+        Check("audio: the meter keeps rising above RMS 0.25 (the old linear x4 had already clipped)",
+              Lvl(0.5) > Lvl(0.25) + 0.05, $"{Lvl(0.25):F3} -> {Lvl(0.5):F3}");
+        Check("audio: the meter is monotonic and bounded",
+              Lvl(0.01) < Lvl(0.05) && Lvl(0.05) < Lvl(0.2) && Lvl(0.2) < Lvl(0.8)
+              && Lvl(0.8) <= 1.0 && Lvl(0.01) >= 0);
+        Check("audio: a quiet passage is clearly below a loud one",
+              Lvl(0.30) - Lvl(0.04) > 0.25, $"{Lvl(0.04):F3} vs {Lvl(0.30):F3}");
+
         // ---- 11. settings roundtrip + corrupt fallback ----
         var sdir = Path.Combine(Path.GetTempPath(), "fullrgb-settings-" + Guid.NewGuid().ToString("N"));
         var spath = Path.Combine(sdir, "settings.json");
@@ -197,6 +211,21 @@ public static class RenderTests
         // ---- 13. parser failure is surfaced ----
         var badDev = SDK.DeviceParser.Parse(0, new byte[] { 1, 2, 3 });
         Check("parser: failure flagged", badDev.ParseFailed && badDev.Kind == SDK.RgbDeviceType.Unknown);
+
+        // ---- 16b. round 22 fix: the connect settle loop must reject unreadable device lists ----
+        // The user's post-hibernate state was 4 controllers of which 3 had truncated payloads.
+        // The old rule ("controllers > 0 && stable >= 2 && past the 4th sample") declared that a
+        // healthy session, so ExpandAllZones did nothing and every retry hit the same wall.
+        Check("connect: 4 controllers with 3 unreadable is NOT settled",
+              !MainWindow.SettleReached(4, 3, 9, 9, 4));
+        Check("connect: a fully readable, stable list IS settled",
+              MainWindow.SettleReached(4, 0, 2, 4, 4));
+        Check("connect: an empty list is never settled",
+              !MainWindow.SettleReached(0, 0, 9, 9, 0));
+        Check("connect: a list that is still changing is not settled",
+              !MainWindow.SettleReached(4, 0, 1, 9, 4));
+        Check("connect: more devices than remembered settles early",
+              MainWindow.SettleReached(6, 0, 2, 0, 4));
 
         // ---- 14. recovery is skipped during cancellation ----
         Check("engine: no recovery when cancelled", !Effects.EffectEngine.ShouldAttemptRecovery(1, true));
@@ -272,6 +301,27 @@ public static class RenderTests
         Check("audio: bass band lights on bass only",
               Effects.EffectRenderer.Render(bassFx, 30, 0, bandCtx).Any(v => v > 0)
               && Effects.EffectRenderer.Render(lvlFx, 30, 0, bandCtx).All(v => v == 0));
+
+        // ---- 17b. round 22 fix: the AudioVU "pulse" shape must follow the BEAT, not a clock ----
+        // The user's report: with band = bass and mode = Pulse the strip "pulsed on its own" and
+        // ignored the music. The pulse came from a fixed ~2.4 s sine, and ctx.Beat - computed by
+        // the provider all along - was never consulted on this path.
+        var musicPulseFx = new Effects.EffectDef
+        {
+            Type = Effects.EffectType.AudioVU, AudioBand = "bass", AudioMode = "pulse",
+            ColorHex = "#FF0000", Color2Hex = "#FF0000", Brightness = 1.0, BeatStrength = 0,
+        };
+        // Same colour on both stops, so the travelling gradient cannot influence the total:
+        // any change in brightness is the pulse envelope and nothing else.
+        int RedSum(byte[] f) => f.Where((_, i) => i % 3 == 0).Sum(v => (int)v);
+        byte[] Pulse(double beat) => Effects.EffectRenderer.Render(musicPulseFx, 30, 0,
+            new Effects.EffectContext { Time = 1.0, AudioBass = 0.6, Beat = beat });
+        int pulseNoBeat = RedSum(Pulse(0.0)), pulseHalf = RedSum(Pulse(0.4)), pulseFull = RedSum(Pulse(1.0));
+        Check("audio pulse: a kick makes the strip clearly brighter at the same band level",
+              pulseFull > pulseNoBeat * 1.4, $"{pulseNoBeat} -> {pulseFull}");
+        Check("audio pulse: brightness rises monotonically with the beat envelope",
+              pulseNoBeat < pulseHalf && pulseHalf < pulseFull,
+              $"{pulseNoBeat} < {pulseHalf} < {pulseFull}");
 
         // ---- 18. FFT correctness: a pure tone must land in its own bin ----
         int n = 1024;
@@ -354,10 +404,10 @@ public static class RenderTests
         var loudCtx = new Effects.EffectContext { Time = 1.0, AudioLevel = 0.7 };
         var barFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "bar", Brightness = 1.0 };
         var mirrorFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "mirror", Brightness = 1.0 };
-        var pulseFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "pulse", Brightness = 1.0 };
+        var beatPulseFx = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioMode = "pulse", Brightness = 1.0 };
         var barF = Effects.EffectRenderer.Render(barFx, 30, 0, loudCtx);
         var mirrorF = Effects.EffectRenderer.Render(mirrorFx, 30, 0, loudCtx);
-        var pulseF = Effects.EffectRenderer.Render(pulseFx, 30, 0, loudCtx);
+        var pulseF = Effects.EffectRenderer.Render(beatPulseFx, 30, 0, loudCtx);
         Check("music: bar and mirror differ", !barF.SequenceEqual(mirrorF));
         Check("music: pulse differs from bar", !pulseF.SequenceEqual(barF));
         bool mirrorSym = true;
@@ -1238,8 +1288,167 @@ public static class RenderTests
               capsType is null ? "struct not found"
                                : $"size={System.Runtime.InteropServices.Marshal.SizeOf(capsType)}");
 
-        // ---- 51. round 21: updater version comparison ----
-        Check("update: a higher minor is newer", Update.AppUpdater.IsNewer("1.6.0", "1.7.0"));
+        // ---- 50e. round 22: the --hid-list skeleton must be a file the app will actually import ----
+        // A tool that emits something its own validator rejects is worse than no tool.
+        var skeletonCol = new Hid.HidBridge.HidCollection
+        {
+            Path = @"\\?\hid#vid_30fa&pid_1140&mi_01&col04", Vid = 0x30FA, Pid = 0x1140,
+            UsagePage = 0xFF01, Usage = 1, FeatureLength = 8, OutputLength = 0,
+        };
+        var parsedSkeleton = Hid.HidProtocolFile.Parse(
+            Hid.HidBridge.ProtocolSkeleton(skeletonCol), "skeleton.json", out var skeletonErr);
+        Check("hid-list: the generated skeleton parses as a valid probe-only protocol",
+              parsedSkeleton is { ExperimentalWrite: false } && parsedSkeleton.Probe is not null
+              && parsedSkeleton.VidNum == 0x30FA && parsedSkeleton.PidNum == 0x1140
+              && parsedSkeleton.Probe.UsagePage == 0xFF01,
+              skeletonErr);
+
+        // A channel with NO feature report cannot be probed, and a 65-byte output report is past
+        // HidProbe.Validate's 2..64 ceiling: the skeleton must still import cleanly.
+        var outputOnlyCol = new Hid.HidBridge.HidCollection
+        {
+            Path = "x", Vid = 0x0B05, Pid = 0x18F3,
+            UsagePage = 0xFF72, Usage = 161, FeatureLength = 0, OutputLength = 65,
+        };
+        Check("hid-list: an output-only channel still yields an importable skeleton",
+              Hid.HidProtocolFile.Parse(
+                  Hid.HidBridge.ProtocolSkeleton(outputOnlyCol), "out.json", out var outOnlyErr) is not null,
+              outOnlyErr);
+
+        // ---- 50d. round 22: an unclean exit must be detectable by the NEXT run ----
+        // The v1.6.0 Hardware-tab crash left nothing behind anywhere - no log line, no event. The
+        // marker file is the only thing that turns "the app vanished" into a fact.
+        var sessDir = Path.Combine(Path.GetTempPath(), "fullrgb-session-" + Guid.NewGuid().ToString("N"));
+        Diag.SessionMarker.PathOverride = Path.Combine(sessDir, "session.lock");
+        Diag.SessionMarker.Begin();
+        Check("session: a first-ever run is not reported as unclean",
+              Diag.SessionMarker.PreviousUncleanRun is null);
+        // No End() here: this is the crash. A fresh process would find the marker still present.
+        Diag.SessionMarker.Begin();
+        Check("session: a run after a crash IS reported as unclean",
+              Diag.SessionMarker.PreviousUncleanRun is { Length: > 0 },
+              Diag.SessionMarker.PreviousUncleanRun ?? "(null)");
+        Diag.SessionMarker.End();
+        Diag.SessionMarker.Begin();
+        Check("session: a clean exit clears the marker so the next run is quiet",
+              Diag.SessionMarker.PreviousUncleanRun is null);
+        Diag.SessionMarker.End();
+        Diag.SessionMarker.PathOverride = null;
+        try { Directory.Delete(sessDir, true); } catch { }
+
+        // ---- 50f. round 22: hotkey combo parsing ----
+        Check("hotkey: Ctrl+Alt+L parses",
+              Setup.HotkeyManager.TryParse("Ctrl+Alt+L", out var hkMods, out var hkVk)
+              && hkVk == 'L' && (hkMods & 0x0002) != 0 && (hkMods & 0x0001) != 0);
+        Check("hotkey: spaces and case are tolerated",
+              Setup.HotkeyManager.TryParse("  ctrl + shift + f5 ", out _, out var hkF5) && hkF5 == 0x74);
+        Check("hotkey: a bare key is refused (it would swallow normal typing)",
+              !Setup.HotkeyManager.TryParse("L", out _, out _));
+        Check("hotkey: a modifier with no key is refused",
+              !Setup.HotkeyManager.TryParse("Ctrl+", out _, out _));
+        Check("hotkey: an unknown key or an out-of-range function key is refused",
+              !Setup.HotkeyManager.TryParse("Ctrl+Alt+ZZ", out _, out _)
+              && !Setup.HotkeyManager.TryParse("Ctrl+Alt+F25", out _, out _)
+              && !Setup.HotkeyManager.TryParse("Ctrl+Alt+!", out _, out _));
+        Check("hotkey: empty is refused",
+              !Setup.HotkeyManager.TryParse("", out _, out _)
+              && !Setup.HotkeyManager.TryParse(null, out _, out _));
+        Check("hotkey: auto-repeat is suppressed so a toggle fires once per press",
+              Setup.HotkeyManager.TryParse("Ctrl+Alt+B", out var hkNoRep, out _) && (hkNoRep & 0x4000) != 0);
+
+        // ---- 52. round 22: palette contrast (WCAG AA) ----
+        // Keep these hex values in sync with App.xaml. "Faint" is 10.5px text that carries meaning
+        // (device meta lines, hints), not decoration, so it must clear 4.5:1 on the card
+        // background - it measured 3.13:1 before this round.
+        Check("palette: faint text clears WCAG AA on the card background",
+              Theme.ContrastRatio("#8A8494", "#16161E") >= 4.5,
+              $"{Theme.ContrastRatio("#8A8494", "#16161E"):F2}:1");
+        Check("palette: body and muted text clear AA comfortably",
+              Theme.ContrastRatio("#E0D8EE", "#16161E") >= 7.0
+              && Theme.ContrastRatio("#98939F", "#16161E") >= 4.5,
+              $"text {Theme.ContrastRatio("#E0D8EE", "#16161E"):F2}:1, " +
+              $"muted {Theme.ContrastRatio("#98939F", "#16161E"):F2}:1");
+        Check("palette: the semantic colours clear AA on the card background",
+              Theme.ContrastRatio("#68D5AF", "#16161E") >= 4.5
+              && Theme.ContrastRatio("#FFC24D", "#16161E") >= 4.5
+              && Theme.ContrastRatio("#FF5C6C", "#16161E") >= 4.5);
+        Check("palette: Text > Muted > Faint stays a visible hierarchy",
+              Theme.ContrastRatio("#E0D8EE", "#16161E") > Theme.ContrastRatio("#98939F", "#16161E")
+              && Theme.ContrastRatio("#98939F", "#16161E") > Theme.ContrastRatio("#8A8494", "#16161E"));
+
+        // ---- 53b. the band value must express DYNAMICS, not pin at full ----
+        // The previous peak-normalised formula read 1.000 for ANY steady signal, so a chorus held
+        // the strip at full brightness and every quiet/loud contrast vanished - the user's "in many
+        // parts of the song the lights just sit there" report. Measuring against a slow baseline
+        // makes the value express the music's dynamics, which is the point of a visualiser.
+        double Rel(double amp, double baseLine) => Sensors.AudioProvider.RelativeToBaseline(amp, baseLine);
+        Check("music dynamics: a steady signal sits mid-range, NOT pinned at full",
+              Rel(1.0, 1.0) is > 0.4 and < 0.7, $"{Rel(1.0, 1.0):F3}");
+        Check("music dynamics: 6 dB above the baseline is clearly brighter",
+              Rel(2.0, 1.0) > 0.8, $"{Rel(2.0, 1.0):F3}");
+        Check("music dynamics: 6 dB below the baseline is clearly dimmer",
+              Rel(0.5, 1.0) < 0.35, $"{Rel(0.5, 1.0):F3}");
+        Check("music dynamics: monotonic across the window",
+              Rel(0.25, 1.0) < Rel(0.5, 1.0) && Rel(0.5, 1.0) < Rel(1.0, 1.0)
+              && Rel(1.0, 1.0) < Rel(2.0, 1.0) && Rel(2.0, 1.0) < Rel(4.0, 1.0));
+        Check("music dynamics: a silent or unset band reads zero (no divide-by-zero)",
+              Rel(0, 1.0) == 0 && Rel(1.0, 0) == 0 && Rel(-1, 1.0) == 0);
+        Check("music dynamics: the old peak normalisation really is gone",
+              Sensors.AudioProvider.ToUnit(1.0, -24, 0) > 0.99        // what the old code returned
+              && Rel(1.0, 1.0) < 0.7,
+              $"old peak formula {Sensors.AudioProvider.ToUnit(1.0, -24, 0):F3} vs baseline {Rel(1.0, 1.0):F3}");
+        Check("music dynamics: a hit stands well clear of the baseline value",
+              Rel(3.0, 1.0) - Rel(1.0, 1.0) > 0.3,
+              $"baseline {Rel(1.0, 1.0):F3} -> hit {Rel(3.0, 1.0):F3}");
+
+        // ---- 54. round 22: the music effect picks its own band ----
+        // A fixed band only works for some music ("bass" does nothing on an acoustic track), so the
+        // user had to re-pick per song. The provider now follows whichever band is actually
+        // carrying the rhythm. These pin the rule rather than leaving it to be judged by ear.
+        double Score(double mean, double move) => Sensors.AudioProvider.RhythmScore(mean, move);
+        Check("auto band: rhythm is movement RELATIVE to the band's own average",
+              Score(0.5, 0.01) < Score(0.2, 0.10),
+              $"loud-steady {Score(0.5, 0.01):F3} vs quiet-rhythmic {Score(0.2, 0.10):F3}");
+        Check("auto band: a band with no content in this track cannot win on noise",
+              Score(0.01, 0.05) == 0 && Score(0.0, 0.9) == 0);
+        Check("auto band: the most rhythmic band wins even when it is the quietest",
+              Sensors.AudioProvider.PickBand(new[] { 0.02, 0.60, 0.02 }, 0) == 1);
+        Check("auto band: a genuinely dominant band takes over",
+              Sensors.AudioProvider.PickBand(new[] { 0.90, 0.10, 0.05 }, 1) == 0);
+        Check("auto band: hysteresis keeps the incumbent against a marginal challenger",
+              Sensors.AudioProvider.PickBand(new[] { 0.52, 0.50, 0.10 }, 1) == 1,
+              "0.52 vs 0.50 is not a clear enough win to flip mid-song");
+        Check("auto band: a clear challenger still wins",
+              Sensors.AudioProvider.PickBand(new[] { 0.90, 0.50, 0.10 }, 1) == 0);
+        Check("auto band: band names map back to the UI labels",
+              Sensors.AudioProvider.BandName(0) == "bass"
+              && Sensors.AudioProvider.BandName(1) == "mid"
+              && Sensors.AudioProvider.BandName(2) == "treble");
+
+        // The manual selector is gone: a saved profile must not be able to pin a fixed band.
+        var legacyBand = new Effects.EffectDef { Type = Effects.EffectType.AudioVU, AudioBand = "bass" };
+        legacyBand.Normalized();
+        Check("auto band: a profile saved with a manual band is coerced to auto",
+              legacyBand.AudioBand == "auto", legacyBand.AudioBand);
+        Check("auto band: BandValue reads the auto level for \"auto\" and for unknown values",
+              Effects.EffectRenderer.BandValue("auto",
+                  new Effects.EffectContext { AudioAuto = 0.7, AudioLevel = 0.1 }) == 0.7
+              && Effects.EffectRenderer.BandValue("nonsense",
+                  new Effects.EffectContext { AudioAuto = 0.7, AudioLevel = 0.1 }) == 0.7);
+
+        // ---- 53. round 22: the night-dimming window wraps midnight ----
+        Check("night dim: an unset hour never dims", !MainWindow.IsNightWindow(-1, 23));
+        Check("night dim: 22:00 -> 07:00 covers the evening and the small hours",
+              MainWindow.IsNightWindow(22, 22) && MainWindow.IsNightWindow(22, 23)
+              && MainWindow.IsNightWindow(22, 0) && MainWindow.IsNightWindow(22, 6)
+              && !MainWindow.IsNightWindow(22, 7) && !MainWindow.IsNightWindow(22, 12));
+        Check("night dim: a start before 07:00 does not wrap",
+              MainWindow.IsNightWindow(3, 3) && MainWindow.IsNightWindow(3, 6)
+              && !MainWindow.IsNightWindow(3, 2) && !MainWindow.IsNightWindow(3, 12));
+        Check("night dim: 07:00 -> 07:00 is an empty window",
+              !MainWindow.IsNightWindow(7, 7) && !MainWindow.IsNightWindow(7, 3));
+
+        // ---- 51. round 21: updater version comparison ----        Check("update: a higher minor is newer", Update.AppUpdater.IsNewer("1.6.0", "1.7.0"));
         Check("update: a higher major is newer", Update.AppUpdater.IsNewer("1.6.0", "2.0.0"));
         Check("update: the same version is not an update", !Update.AppUpdater.IsNewer("1.6.0", "1.6.0"));
         Check("update: an older version is not an update", !Update.AppUpdater.IsNewer("1.6.0", "1.5.9"));

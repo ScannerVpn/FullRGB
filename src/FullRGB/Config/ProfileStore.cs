@@ -199,6 +199,29 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoRecoverLighting { get; set; } = true;
 
+    // ---------- round 22: global hotkeys, global brightness, motion ----------
+
+    /// <summary>System-wide hotkey combos ("Ctrl+Alt+L"). Empty = that action has no hotkey.</summary>
+    public string HotkeyToggleEffects { get; set; } = "";
+    public string HotkeyBlackout { get; set; } = "";
+    public string HotkeyNextProfile { get; set; } = "";
+
+    /// <summary>Master dimmer applied on top of every effect's own brightness (1.0 = off).</summary>
+    public double GlobalBrightness { get; set; } = 1.0;
+
+    /// <summary>Below this hour (0-23) the global dimmer is scaled by NightBrightness. -1 = off.</summary>
+    public int NightDimFromHour { get; set; } = -1;
+
+    /// <summary>Dimmer multiplier used between NightDimFromHour and 07:00.</summary>
+    public double NightBrightness { get; set; } = 0.5;
+
+    /// <summary>Stops the hero preview strip animating (and slows the effect clock). For users who
+    /// find a constantly moving UI distracting, or who want the battery back on a laptop.</summary>
+    public bool ReduceMotion { get; set; }
+
+    /// <summary>Beta channel: accept GitHub pre-releases in the update check.</summary>
+    public bool UpdateBetaChannel { get; set; }
+
     // ---------- round 21: automation / update / companion / time schedule / HID guard ----------
 
     /// <summary>Automatic update checks + download from GitHub Releases (applied on next start).</summary>
