@@ -121,12 +121,44 @@ jobs:
           if ($len -lt 78MB) { throw "exe is $len bytes - engine.zip is probably missing" }
           (Get-FileHash $exe -Algorithm SHA256).Hash | Tee-Object -FilePath dist/FullRGB.exe.sha256
 
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # Most users download the installer, not the bare exe: it puts the app somewhere the
+          # Start Menu, Desktop and "Apps & features" all agree on, and keeps settings.json and
+          # the extracted engine OUTSIDE the install dir so an update cannot take them.
+          choco install innosetup --no-progress -y | Out-Null
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
+
+          # Take the version from the BINARY we just built rather than re-parsing the tag: the
+          # installer then always matches the exe it wraps, which removes the "keep the two in
+          # step" hazard the .iss warns about. ProductVersion can carry a +build suffix.
+          $ver = (Get-Item "dist/FullRGB.exe").VersionInfo.ProductVersion
+          if ($ver -match '^([0-9]+\.[0-9]+\.[0-9]+)') { $ver = $Matches[1] }
+          Write-Host "installer version: $ver"
+
+          # DistDir is resolved relative to installer\, hence ..\dist and not dist.
+          & $iscc "/DAppVersion=$ver" "/DDistDir=..\dist" installer\FullRGB.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+          $setup = "installer/Output/FullRGB-Setup-$ver.exe"
+          if (-not (Test-Path $setup)) { throw "no installer produced at $setup" }
+          $len = (Get-Item $setup).Length
+          Write-Host "installer = $([math]::Round($len/1MB,1)) MB"
+          # Inno can exit 0 having silently skipped a missing [Files] source, producing a stub.
+          # Anything under 20 MB cannot contain the 84 MB payload compressed.
+          if ($len -lt 20MB) { throw "installer is only $len bytes - the payload is probably missing" }
+          (Get-FileHash $setup -Algorithm SHA256).Hash | Tee-Object -FilePath "$setup.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
           name: FullRGB-Windows-x64
           path: |
             dist/FullRGB.exe
             dist/FullRGB.exe.sha256
+            installer/Output/FullRGB-Setup-*.exe
+            installer/Output/FullRGB-Setup-*.exe.sha256
           retention-days: 30
 
       - name: Attach to release
@@ -143,7 +175,8 @@ jobs:
             gh release create $tag --title "FullRGB $tag" `
               --notes "Automated build from commit $env:GITHUB_SHA" --draft
           }
-          # Uploading from inside GitHub's network: the 84 MB asset never crosses a home uplink.
+          # Uploading from inside GitHub's network: the assets never cross a home uplink.
           gh release upload $tag dist/FullRGB.exe dist/FullRGB.exe.sha256 --clobber
+          gh release upload $tag installer/Output/FullRGB-Setup-*.exe installer/Output/FullRGB-Setup-*.exe.sha256 --clobber
           gh release edit $tag --draft=false
           gh release view $tag --json isDraft,assets
