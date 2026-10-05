@@ -81,10 +81,17 @@ public static class EngineShadow
     ///
     /// <paramref name="consecutiveStrikes"/> counts probes that found no evidence of painting
     /// (no reply at all, or replies whose stored colours never moved).
+    ///
+    /// <paramref name="animatedDeviceCount"/> is how many devices run an effect that changes every
+    /// frame. When NONE does, "the colours never moved" is the expected state, not evidence of a
+    /// stall: a Music effect in silence and every static colouring hold still on purpose, so the
+    /// strike-based Repair at the bottom must never fire. Structural failures (port gone, engine
+    /// unreachable) are unaffected. Defaults to 1 so calls that predate the parameter keep their
+    /// meaning.
     /// </summary>
     public static Verdict Decide(Snapshot? now, Snapshot? before, bool effectsRunning,
                                  double secondsSinceSession, int consecutiveStrikes,
-                                 int probesWithoutGrowth)
+                                 int probesWithoutGrowth, int animatedDeviceCount = 1)
     {
         if (now is null) return Verdict.Wait;                       // no probe ran at all
         if (secondsSinceSession < GraceSeconds) return Verdict.Wait;
@@ -110,6 +117,14 @@ public static class EngineShadow
             if (now.Devices.Count == 0) return Verdict.Wait;
             return consecutiveStrikes >= StrikesToAct ? Verdict.Rebuild : Verdict.Wait;
         }
+
+        // With zero animated devices the motion signal carries no information at all — a session
+        // painting nothing but static colours (or a silent Music effect) never moves by design, so
+        // neither the strike-based Repair nor the "nothing grew" Rebuild may fire from it. A
+        // healthy AudioVU-in-silence session collected 2 strikes in 2 minutes on 2026-10-03 and
+        // had its engine replaced for it, over and over; that false positive started the boot/wake
+        // repair churn. Structural failures above are unaffected.
+        if (animatedDeviceCount <= 0) return Verdict.Ok;
 
         if (before is not null && now.Signature == before.Signature && probesWithoutGrowth >= 3)
             return Verdict.Rebuild;    // nothing grew for a few probes: re-expand the zones
@@ -296,11 +311,19 @@ public static class EngineShadow
 
     private static byte[] Read(NetworkStream s, out uint type)
     {
-        var header = ReadExact(s, 16);
-        type = BitConverter.ToUInt32(header, 8);
-        uint size = BitConverter.ToUInt32(header, 12);
-        if (size > 1 << 20) throw new IOException("oversized SDK reply");
-        return size == 0 ? Array.Empty<byte>() : ReadExact(s, (int)size);
+        while (true)
+        {
+            var header = ReadExact(s, 16);
+            type = BitConverter.ToUInt32(header, 8);
+            uint size = BitConverter.ToUInt32(header, 12);
+            if (size > 1 << 20) throw new IOException("oversized SDK reply");
+            var payload = size == 0 ? Array.Empty<byte>() : ReadExact(s, (int)size);
+            // DEVICE_LIST_UPDATED (100) is a server-initiated broadcast, not a reply: consume it
+            // and keep waiting, exactly like the app's client does. Without this a broadcast that
+            // lands between two probe requests desyncs the probe and every controller parses to
+            // garbage, which the watchdog then misreads as a dead session.
+            if (type != FullRGB.SDK.Pkt.DEVICE_LIST_UPDATED) return payload;
+        }
     }
 
     private static byte[] ReadExact(NetworkStream s, int n)

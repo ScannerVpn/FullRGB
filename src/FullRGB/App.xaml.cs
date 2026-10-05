@@ -380,9 +380,17 @@ public partial class App : Application
         }
         if (!isFirst)
         {
-            System.Windows.MessageBox.Show(
-                L10n.T("err.alreadyRunning"),
-                "FullRGB", MessageBoxButton.OK, MessageBoxImage.Information);
+            // If launched with --minimized, --headless, or -m (e.g. from autostart, logon task, or background trigger),
+            // silently exit without showing a blocking message box.
+            bool silent = e.Args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase) ||
+                                          a.Equals("--headless", StringComparison.OrdinalIgnoreCase) ||
+                                          a.Equals("-m", StringComparison.OrdinalIgnoreCase));
+            if (!silent)
+            {
+                System.Windows.MessageBox.Show(
+                    L10n.T("err.alreadyRunning"),
+                    "FullRGB", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             Shutdown(0);
             return;
         }
@@ -407,10 +415,11 @@ public partial class App : Application
         // Self-heal the logon task: it stores an ABSOLUTE exe path, so running from a new
         // folder (every dist build) left it aiming at a deleted exe and autostart silently
         // died with 0x80070002. Rewrite it to this exe; own-user task, no UAC, best-effort.
-        if (Settings.StartWithWindows)
+        if (Settings.StartWithWindows || Autostart.IsRegistered())
         {
             try
             {
+                Settings.StartWithWindows = true;
                 if (!Autostart.EnsureCurrent(Settings.StartMinimized ? "--minimized" : ""))
                     StartupWindow.StartupWarning = string.Join("\n",
                         new[] { StartupWindow.StartupWarning, L10n.T("status.failed", "autostart task") }

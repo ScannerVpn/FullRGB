@@ -227,7 +227,30 @@ public partial class StartupWindow : Window
                 // A remembered inventory is a free oracle: if the count stopped growing AND is
                 // exactly what we expect, waiting for the i >= 4 floor buys no information.
                 // A partial answer never matches, so a cold boot still gets the full window.
-                if (now > 0 && stable >= 2 && (i >= 4 || now == remembered)) break;
+                int bad = Client.Controllers.Count(c => c.ParseFailed);
+                if (now > 0 && bad == 0 && stable >= 2 && (i >= 4 || now >= remembered)) break;
+            }
+
+            // Torn ("partially readable") controllers after the full window mean the engine was
+            // BORN against a busy USB stack — it described the device badly once and now serves
+            // that same broken answer forever; refreshing never heals it. One replacement, exactly
+            // like the empty-list revive above: the new engine waits for the old process to exit,
+            // so its detection no longer races held USB handles. MainWindow's recovery remains
+            // the net if even this replacement lands torn.
+            if (Client.Controllers.Count > 0 && Client.Controllers.Any(c => c.ParseFailed) && !restartedForBoot)
+            {
+                try
+                {
+                    Log(L10n.T("status.engineRevive"), (Brush)FindResource("Faint"));
+                    await Manager.RestartAsync(TimeSpan.FromSeconds(60), _cts.Token);
+                    await Task.Delay(3500, _cts.Token);
+                    await Task.Run(() => Client!.Connect("127.0.0.1", App.Settings.ServerPort, "FullRGB"), _cts.Token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception re)
+                {
+                    Log("engine: " + re.Message, (Brush)FindResource("Danger"));
+                }
             }
         }
         catch (Exception e)

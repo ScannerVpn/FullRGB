@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
@@ -83,6 +83,15 @@ public partial class MainWindow : Window
                 try { StartHotkeys(); } catch { /* hotkeys are a convenience, never a blocker */ }
                 if (_client is { Connected: true }) OnConnected();
                 else await ConnectAsync();
+                // The splash's bounded settle can hand over a session with unreadable controllers
+                // (an engine born against a still-busy USB stack describes them only partially).
+                // Painting the readable part is right; the torn rest gets the full wake-recovery
+                // — which now replaces the engine honestly — instead of waiting for the watchdog.
+                if (_client is { Connected: true } && _client.Controllers.Any(c => c.ParseFailed))
+                    BeginResumeRecovery();
+                // First session after a boot: run the user's manual "Rescan" fix automatically,
+                // even when the device count matches the cache (half-initialized hardware).
+                _ = RunBootRescanIfFirstSessionAsync();
                 // Say it out loud if the last run died: the crash itself left nothing in the log,
                 // so this is the only place the user learns that something went wrong. Reported
                 // AFTER the connect so it is not immediately overwritten by the status pill.
@@ -97,7 +106,14 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) HideToTray(); };
         try
         {
-            Application.Current.SessionEnding += (_, _) => { _osShuttingDown = true; _reallyExiting = true; };
+            Application.Current.SessionEnding += (_, _) =>
+            {
+                _osShuttingDown = true;
+                _reallyExiting = true;
+                Diag.SessionMarker.End();
+                try { FlushPendingEdits(); } catch { }
+                try { ProfileStore.Save(App.Settings); } catch { }
+            };
         }
         catch { }
     }
@@ -191,9 +207,15 @@ public partial class MainWindow : Window
                 // effect edits before the freeze.
                 try { FlushPendingEdits(); } catch { }
             };
-            _powerMonitor.Resumed += () => { Diag.AppLog.Info("power: resume event"); BeginResumeRecovery(); };
+            _powerMonitor.Resumed += () => { Diag.AppLog.Info("power: resume event"); _osShuttingDown = false; BeginResumeRecovery(); };
             _powerMonitor.SessionChanged += OnSessionChanged;
-            _powerMonitor.SessionEnding += () => { Diag.AppLog.Info("power: session ending"); _osShuttingDown = true; };
+            _powerMonitor.SessionEnding += () =>
+            {
+                Diag.AppLog.Info("power: session ending");
+                _osShuttingDown = true;
+                Diag.SessionMarker.End();
+                try { FlushPendingEdits(); } catch { }
+            };
         }
         catch { _powerMonitor = null; }
 
@@ -217,6 +239,7 @@ public partial class MainWindow : Window
                 // detected gap must be visible in the log: without it a wake-up that failed to
                 // repair looks like the app simply stopped working for no reason.
                 Diag.AppLog.Warn($"power: suspend gap detected (tick {tickGap} ms, wall {wallGap} ms)");
+                _osShuttingDown = false;
                 BeginResumeRecovery();
             }
         };
@@ -266,6 +289,11 @@ public partial class MainWindow : Window
     /// <summary>Rebuild attempts that produced no new LEDs; after two the engine is replaced.</summary>
     private int _rebuildsWithoutGrowth;
 
+    /// <summary>Last time a recovery attempt actually replaced the engine process. Gates the
+    /// watchdog's own replace path: without it a session that could not be fixed turned into an
+    /// engine restart every ~2 minutes, all day (72 restarts on 2026-10-03).</summary>
+    private DateTime _lastEngineReplaceUtc = DateTime.MinValue;
+
     private async Task OnWatchdogVerdictAsync(Setup.EngineShadow.Verdict verdict, Setup.EngineShadow.Snapshot snap)
     {
         if (_reallyExiting || _osShuttingDown || !IsLoaded) return;
@@ -281,6 +309,24 @@ public partial class MainWindow : Window
             return;
         }
         if (owns) return;
+        bool engineCooling = (DateTime.UtcNow - _lastEngineReplaceUtc).TotalMinutes < 10;
+
+        // Unreadable ("partially readable") controllers mean the ENGINE's descriptors are torn —
+        // no re-expand can fix that, and the shadow probe's view of it is garbage too. Hand the
+        // whole session to the wake-recovery path (which replaces the engine) instead of trying
+        // verdict-specific fixes here; rate-limited so a persistently broken engine cannot turn
+        // into a restart loop.
+        bool unreadable = (_client?.Controllers.Count(c => c.ParseFailed) ?? 0) > 0;
+        if (unreadable)
+        {
+            if (verdict != Setup.EngineShadow.Verdict.Ok && !engineCooling)
+            {
+                _statusIsRecovering = true;
+                SetStatus(L10n.T("status.recover", L10n.T("status.recoverEngine")), StatusKind.Warn);
+                BeginResumeRecovery();
+            }
+            return;
+        }
         if (verdict == Setup.EngineShadow.Verdict.Rebuild && _rebuildsWithoutGrowth < 2)
         {
             _rebuildsWithoutGrowth++;
@@ -291,7 +337,19 @@ public partial class MainWindow : Window
             return;
         }
         // Either the engine is gone, or re-expanding twice changed nothing: replace the engine
-        // exactly the way a wake-up does (teardown, restart, reconnect, re-apply).
+        // exactly the way a wake-up does (teardown, restart, reconnect, re-apply). A hard cooldown
+        // applies: the watchdog fires every minute, so without it an unfixable session meant a
+        // process restart every ~2 minutes — the lights flickered off for half a minute each time
+        // and the engine never got a chance to be the thing that heals on its own.
+        if (engineCooling)
+        {
+            if (!_statusIsRecovering)
+            {
+                _statusIsRecovering = true;
+                SetStatus(L10n.T("status.recover", L10n.T("status.recoverEngine")), StatusKind.Warn);
+            }
+            return;
+        }
         _rebuildsWithoutGrowth = 0;
         _statusIsRecovering = true;
         SetStatus(L10n.T("status.recover", L10n.T("status.recoverEngine")), StatusKind.Warn);
@@ -312,6 +370,13 @@ public partial class MainWindow : Window
         var profile = CurrentProfile();
         try
         {
+            bool wasRunning = engine.IsRunning;
+            // The expand below re-reads every controller descriptor — and a descriptor read that
+            // races a running frame stream comes back TORN (verified on 2026-10-03: the same
+            // engine answers byte-perfect when nothing paints and corrupted while a client
+            // streams UPDATE_LEDS). Stop the loops for the second the expand takes, exactly like
+            // a manual Rescan does, so the re-read sees the hardware alone.
+            engine.Stop();
             await Task.Run(() =>
             {
                 try { client.ExpandAllZones(default, (d, z) => profile.ZoneSize(d, z)); } catch { }
@@ -320,7 +385,7 @@ public partial class MainWindow : Window
             // The dedupe cache would suppress a frame that only LOOKS unchanged, and a re-opened
             // session can hold stale colours on the device: force the next frames out.
             engine.InvalidateFrames();
-            if (engine.IsRunning) engine.Apply(profile);
+            if (wasRunning || App.Settings.AutoStartEffects) engine.Apply(profile);
             _sessionStartedUtc = DateTime.UtcNow;
             OnSessionHealthy();
             RefreshStatus();
@@ -358,7 +423,17 @@ public partial class MainWindow : Window
             {
                 bool animated = false;
                 foreach (var zone in dev.Zones.Where(z => z.LedsCount > 0))
-                    if (profile.EffectFor(dev, zone).IsAnimated) { animated = true; break; }
+                {
+                    var eff = profile.EffectFor(dev, zone);
+                    // Audio-driven and game-event-driven effects only move when sound/game events occur.
+                    // During silence or when idling, they legitimately hold still, so the watchdog must not
+                    // treat silence as an engine stall.
+                    if (eff.IsAnimated && eff.Type is not (Effects.EffectType.AudioVU or Effects.EffectType.Spectrum or Effects.EffectType.GamePulse))
+                    {
+                        animated = true;
+                        break;
+                    }
+                }
                 if (animated) set.Add(dev.Name);
             }
         }
@@ -387,6 +462,7 @@ public partial class MainWindow : Window
                            (long)_resumeHeartbeat.Interval.TotalMilliseconds);
         if (machineSlept)
         {
+            _osShuttingDown = false;
             BeginResumeRecovery();
             return;
         }
@@ -398,6 +474,7 @@ public partial class MainWindow : Window
             return;
         }
         if (ev is not (Setup.SessionEvent.Unlock or Setup.SessionEvent.ConsoleConnect)) return;
+        _osShuttingDown = false;
         int nowSession = Setup.PowerMonitor.CurrentSessionId();
         if (nowSession < 0 || _sessionIdAtStart < 0 || nowSession == _sessionIdAtStart) return;
         // We are in a different terminal session than the one we started in: treat it like a wake.
@@ -423,6 +500,7 @@ public partial class MainWindow : Window
             return;
         }
         if (e.Mode != PowerModes.Resume) return;
+        _osShuttingDown = false;
         BeginResumeRecovery();
     }
 
@@ -468,10 +546,12 @@ public partial class MainWindow : Window
                 await Task.Delay(TimeSpan.FromMilliseconds(250));
 
             // USB/SMBus re-enumeration takes a few seconds after resume; touching the engine before
-            // that finds no devices and would look like the bug we are fixing.
-            await Task.Delay(TimeSpan.FromSeconds(3));
+            // that finds no devices and would look like the bug we are fixing. 8 s, not 3: an
+            // engine whose detection runs against a still-settling USB stack is born with corrupt
+            // descriptors and stays broken for its whole life.
+            await Task.Delay(TimeSpan.FromSeconds(8));
 
-            for (int attempt = 1; attempt <= 3; attempt++)
+            for (int attempt = 1; attempt <= 4; attempt++)
             {
                 if (_reallyExiting || _osShuttingDown || !IsLoaded) return;
                 SetStatus(L10n.T("status.resume"), StatusKind.Busy);
@@ -485,9 +565,9 @@ public partial class MainWindow : Window
                                  $"unreadable={_client?.Controllers.Count(c => c.ParseFailed) ?? -1}, " +
                                  $"engineRunning={_engine?.IsRunning == true}, " +
                                  $"connected={_client?.Connected == true}");
-                await Task.Delay(TimeSpan.FromSeconds(3 * attempt));
+                await Task.Delay(TimeSpan.FromSeconds(5 * attempt));
             }
-            Diag.AppLog.Error("resume recovery FAILED after 3 attempts — lighting is still down");
+            Diag.AppLog.Error("resume recovery FAILED after 4 attempts — lighting is still down");
             SetStatus(L10n.T("status.resumeFailed"), StatusKind.Error);
         }
         finally
@@ -528,19 +608,22 @@ public partial class MainWindow : Window
         });
 
         // 2) Replace the engine process. An engine started by the elevated task survives a plain
-        //    Stop(), so that instance is ended through the task first (no UAC); RestartAsync then
-        //    kills leftovers, waits for the port to close and starts a fresh engine, so a wedged
-        //    post-suspend server can never be re-attached. Off the UI thread too: `schtasks` is
-        //    synchronous and can block for seconds.
+        //    Stop(), so that instance is ended through the task first (no UAC) — ALWAYS, not only
+        //    when this manager happens to remember starting it: a replacement that skips this
+        //    attaches to the surviving old engine and "repairs" nothing. RestartAsync then waits
+        //    for the port to close AND the process to exit, so a wedged post-suspend server can
+        //    never be re-attached and the new detection never races the old handles. Off the UI
+        //    thread: `schtasks` is synchronous and can block for seconds.
         try
         {
             _mgr ??= new OpenRgbProcessManager(OpenRgbProcessManager.DefaultExePath(), App.Settings.ServerPort);
             var mgr = _mgr;
             await Task.Run(async () =>
             {
-                if (mgr.AttachedToExisting) Setup.EngineTask.EndTaskInstance();
+                try { if (Setup.EngineTask.IsRegistered()) Setup.EngineTask.EndTaskInstance(); } catch { }
                 await mgr.RestartAsync();
             });
+            _lastEngineReplaceUtc = DateTime.UtcNow;
         }
         catch { /* a failed attempt is retried by the caller */ }
 
@@ -554,6 +637,14 @@ public partial class MainWindow : Window
         await ConnectAsync();
         _sessionStartedUtc = DateTime.UtcNow;
         if (_client is not { Connected: true } || _engine is null) return false;
+
+        // An engine born while the old one still held the USB handles (or during post-wake USB
+        // settling) registers controllers it can describe only partially; they parse to
+        // "(partially readable device)" and are never paintable. Accepting such a session as
+        // repaired was the false success that let the recovery loop "succeed" every 2 minutes
+        // while three of four devices stayed dark — the honest answer is failure, and the caller
+        // replaces the engine again (this time without racing anything).
+        if (_client.Controllers.Count == 0 || _client.Controllers.Any(c => c.ParseFailed)) return false;
 
         if (wantPaint)
         {
@@ -747,7 +838,24 @@ public partial class MainWindow : Window
                 try
                 {
                     await Task.Delay(800);
-                    await Task.Run(() => _client.RefreshControllers());
+                    if (bad > 0)
+                    {
+                        // A reply that the engine built while its device list was mid-mutation
+                        // desyncs the WHOLE socket: every later read on it stays shifted no matter
+                        // how long we wait. A fresh connection re-syncs trivially, so when the
+                        // last read was torn, reconnect before reading again instead of polling
+                        // a poisoned stream (each cycle measured this on 2026-10-03: 25 identical
+                        // torn windows on one socket, clean on the very next connection).
+                        await Task.Run(() =>
+                        {
+                            _client!.Disconnect();
+                            _client.Connect(_client.Host, _client.Port, _client.ClientName);
+                        });
+                    }
+                    else
+                    {
+                        await Task.Run(() => _client.RefreshControllers());
+                    }
                 }
                 catch { break; } // session died mid-wait: the caller's Connected check reports it
             }
@@ -1488,6 +1596,22 @@ public partial class MainWindow : Window
             StatusKind.Busy => "Accent",
             _ => "Faint",
         });
+    }
+
+    private void FxPrev_Click(object sender, RoutedEventArgs e)
+    {
+        FxScrollViewer?.ScrollToHorizontalOffset(Math.Max(0, FxScrollViewer.HorizontalOffset - 240));
+    }
+
+    private void FxNext_Click(object sender, RoutedEventArgs e)
+    {
+        FxScrollViewer?.ScrollToHorizontalOffset(FxScrollViewer.HorizontalOffset + 240);
+    }
+
+    private void FxScrollViewer_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        FxScrollViewer?.ScrollToHorizontalOffset(FxScrollViewer.HorizontalOffset - e.Delta);
+        e.Handled = true;
     }
 }
 

@@ -157,7 +157,10 @@ public sealed class OpenRgbProcessManager : IDisposable
                 if (!await PortOpenAsync().ConfigureAwait(false)) break;
                 await Task.Delay(200, ct).ConfigureAwait(false);
             }
-            await Task.Delay(600, ct).ConfigureAwait(false);
+            // ...and for its PROCESS to exit: the port closes before the OS releases the
+            // device handles, and a replacement that detects against held handles is born
+            // with corrupt descriptors (see WaitForEngineExitAsync).
+            await WaitForEngineExitAsync(ct).ConfigureAwait(false);
         }
         AttachedToExisting = false;
 
@@ -268,8 +271,43 @@ public sealed class OpenRgbProcessManager : IDisposable
             if (!await PortOpenAsync().ConfigureAwait(false)) break;
             await Task.Delay(200, ct).ConfigureAwait(false);
         }
-        await Task.Delay(600, ct).ConfigureAwait(false);
+        await WaitForEngineExitAsync(ct).ConfigureAwait(false);
         await StartAsync(timeout, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits until no OpenRGB.exe process remains (bounded), then a short grace period.
+    ///
+    /// WHY: the SDK port closes when the server socket dies, but the OS releases the USB/HID/SMBus
+    /// handles only at real process exit. A replacement engine whose device detection runs against
+    /// handles still held by the dying predecessor registers controllers with corrupt descriptors
+    /// — and serves that torn data for the REST OF ITS LIFE (an independent probe reads the same
+    /// garbage). Every boot and every wake ran this race, which is how a whole day's log filled
+    /// with "3 unreadable" device lists despite 72 engine replacements.
+    /// </summary>
+    private static async Task WaitForEngineExitAsync(CancellationToken ct, int timeoutMs = 10000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!AnyEngineProcess()) break;
+            await Task.Delay(200, ct).ConfigureAwait(false);
+        }
+        // grace: give the driver stack time to finish releasing what the exiting process held
+        await Task.Delay(800, ct).ConfigureAwait(false);
+    }
+
+    private static bool AnyEngineProcess()
+    {
+        try
+        {
+            var procs = Process.GetProcessesByName("OpenRGB");
+            bool any = procs.Length > 0;
+            foreach (var p in procs) { try { p.Dispose(); } catch { } }
+            return any;
+        }
+        catch { return false; }
     }
 
     public async Task<bool> PortOpenAsync()

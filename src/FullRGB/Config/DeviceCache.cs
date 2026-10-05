@@ -96,6 +96,8 @@ public sealed class DeviceCache
         foreach (var dev in devices)
         {
             if (string.IsNullOrEmpty(dev.Key)) continue;
+            if (dev.ParseFailed) continue;
+            if (string.Equals(dev.Name, "(partially readable device)", StringComparison.OrdinalIgnoreCase)) continue;
             byKey[dev.Key] = new CachedDevice
             {
                 Key = dev.Key,
@@ -182,7 +184,10 @@ public sealed class DeviceCache
             if (!File.Exists(path)) return null;
             var cache = JsonSerializer.Deserialize<DeviceCache>(File.ReadAllText(path));
             if (cache?.Devices is null) return null;
-            cache.Devices = cache.Devices.Where(d => !string.IsNullOrEmpty(d.Key)).ToList();
+            cache.Devices = cache.Devices
+                .Where(d => !string.IsNullOrEmpty(d.Key) &&
+                            !string.Equals(d.Name, "(partially readable device)", StringComparison.OrdinalIgnoreCase))
+                .ToList();
             cache.Signature = cache.ComputeSignature();
             return cache;
         }

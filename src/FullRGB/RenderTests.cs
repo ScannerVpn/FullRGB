@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 
 namespace FullRGB;
@@ -381,7 +381,7 @@ public static class RenderTests
         messy.Normalized();
         Check("settings: bad language falls back to en", messy.Language == "en");
         Check("settings: bad port falls back", messy.ServerPort == 6742);
-        Check("settings: bad accent falls back", messy.AccentHex == "#A487EF");
+        Check("settings: bad accent falls back", messy.AccentHex == "#38BDF8");
         Check("settings: duplicate names made unique",
               messy.Profiles.Select(p => p.Name).Distinct().Count() == messy.Profiles.Count);
         Check("settings: active profile repaired",
@@ -864,6 +864,12 @@ public static class RenderTests
         Check("cache: an extra zone changes the signature",
               Config.DeviceCache.From(new[] { Dev("Commander Core", "usb-1", 64, zones: 2) }, t0).Signature != sigBase);
 
+        var withBad = cache.Merge(new[] {
+            new SDK.RgbController { Index = 2, Name = "(partially readable device)", ParseFailed = true },
+            new SDK.RgbController { Index = 3, Name = "Broken", ParseFailed = true, Location = "usb-2" },
+        }, t0.AddMinutes(6));
+        Check("cache: unreadable devices are never cached", withBad.Devices.Count == 2 && !withBad.Has("(partially readable device)"));
+
         var cachePath = Path.Combine(Path.GetTempPath(), $"fullrgb-cache-{Guid.NewGuid():N}.json");
         try
         {
@@ -878,6 +884,11 @@ public static class RenderTests
             File.WriteAllText(cachePath, "{ not json at all");
             Check("cache: a corrupt file is a miss, not a crash",
                   Config.DeviceCache.LoadFrom(cachePath) is null);
+
+            File.WriteAllText(cachePath, "{\"Devices\": [{\"Key\": \"k1\", \"Name\": \"(partially readable device)\"}, {\"Key\": \"k2\", \"Name\": \"Real\"}]}");
+            var purged = Config.DeviceCache.LoadFrom(cachePath);
+            Check("cache: partially readable device is purged on load",
+                  purged is not null && purged.Devices.Count == 1 && purged.Devices[0].Name == "Real");
         }
         finally { try { File.Delete(cachePath); } catch { } }
 
@@ -889,6 +900,19 @@ public static class RenderTests
         Check("followup: a short session with remembered hardware is re-scanned", MainWindow.NeedsFollowupScan(2, 4));
         Check("followup: extra hardware needs no follow-up scan", !MainWindow.NeedsFollowupScan(5, 4));
         Check("followup: nothing remembered means nothing is missing", !MainWindow.NeedsFollowupScan(0, 0));
+
+        // Round 23: a full count is no proof of health right after a boot, so the FIRST session
+        // after one also runs the user's manual "press Rescan" fix automatically. The uptime gate
+        // must stay true only near a real boot: GetTickCount64 keeps counting across sleep and
+        // hibernate, so waking a machine that booted days ago must never re-scan on its own.
+        Check("bootrescan: a session seconds after boot qualifies",
+              MainWindow.IsFirstSessionAfterBoot(45_000));
+        Check("bootrescan: a session inside the grace window qualifies",
+              MainWindow.IsFirstSessionAfterBoot(14 * 60_000, 15));
+        Check("bootrescan: past the grace window it never fires",
+              !MainWindow.IsFirstSessionAfterBoot(15 * 60_000, 15));
+        Check("bootrescan: a wake from an older boot does not qualify",
+              !MainWindow.IsFirstSessionAfterBoot(3L * 24 * 60 * 60_000));
 
         // ---- 43. round 20: the OS signals a real window receives ----
         // The managed PowerModeChanged event was reproduced as NOT firing on Windows 11, so the
@@ -983,6 +1007,18 @@ public static class RenderTests
               Setup.EngineShadow.Decide(noDevices, noDevices, true, 300, 2, 0) == Setup.EngineShadow.Verdict.Wait);
         Check("watchdog: zones stuck at the pre-expand size are rebuilt",
               Setup.EngineShadow.Decide(healthy, healthy, true, 300, 0, 4) == Setup.EngineShadow.Verdict.Rebuild);
+
+        // Round 23: with NO animated device, "the colours never moved" carries no information —
+        // every static colouring and a silent Music effect hold still on purpose. The 2026-10-03
+        // boot churn (an engine replaced every 2 minutes all day) started exactly here: a healthy
+        // session painting a silent Music effect collected 2 strikes and was "repaired" forever.
+        Check("watchdog: strikes mean nothing when no effect is animated",
+              Setup.EngineShadow.Decide(healthy, healthy, true, 300, 2, 0, 0) == Setup.EngineShadow.Verdict.Ok);
+        Check("watchdog: structural failures still fire with no animated devices",
+              Setup.EngineShadow.Decide(new Setup.EngineShadow.Snapshot { PortListening = false },
+                                        healthy, true, 300, 2, 0, 0) == Setup.EngineShadow.Verdict.Repair);
+        Check("watchdog: animated devices keep the strike-based repair alive",
+              Setup.EngineShadow.Decide(healthy, healthy, true, 300, 2, 0, 1) == Setup.EngineShadow.Verdict.Repair);
 
         // A snapshot must describe hardware, not a paint: same devices, different colours, same shape.
         Check("watchdog: the shape signature ignores the colours",
@@ -1361,20 +1397,20 @@ public static class RenderTests
         // (device meta lines, hints), not decoration, so it must clear 4.5:1 on the card
         // background - it measured 3.13:1 before this round.
         Check("palette: faint text clears WCAG AA on the card background",
-              Theme.ContrastRatio("#8A8494", "#16161E") >= 4.5,
-              $"{Theme.ContrastRatio("#8A8494", "#16161E"):F2}:1");
+              Theme.ContrastRatio("#889DC2", "#121829") >= 4.5,
+              $"{Theme.ContrastRatio("#889DC2", "#121829"):F2}:1");
         Check("palette: body and muted text clear AA comfortably",
-              Theme.ContrastRatio("#E0D8EE", "#16161E") >= 7.0
-              && Theme.ContrastRatio("#98939F", "#16161E") >= 4.5,
-              $"text {Theme.ContrastRatio("#E0D8EE", "#16161E"):F2}:1, " +
-              $"muted {Theme.ContrastRatio("#98939F", "#16161E"):F2}:1");
+              Theme.ContrastRatio("#F0F4FF", "#121829") >= 7.0
+              && Theme.ContrastRatio("#9FB2D8", "#121829") >= 4.5,
+              $"text {Theme.ContrastRatio("#F0F4FF", "#121829"):F2}:1, " +
+              $"muted {Theme.ContrastRatio("#9FB2D8", "#121829"):F2}:1");
         Check("palette: the semantic colours clear AA on the card background",
-              Theme.ContrastRatio("#68D5AF", "#16161E") >= 4.5
-              && Theme.ContrastRatio("#FFC24D", "#16161E") >= 4.5
-              && Theme.ContrastRatio("#FF5C6C", "#16161E") >= 4.5);
+              Theme.ContrastRatio("#34D399", "#121829") >= 4.5
+              && Theme.ContrastRatio("#FBBF24", "#121829") >= 4.5
+              && Theme.ContrastRatio("#FB5A77", "#121829") >= 4.5);
         Check("palette: Text > Muted > Faint stays a visible hierarchy",
-              Theme.ContrastRatio("#E0D8EE", "#16161E") > Theme.ContrastRatio("#98939F", "#16161E")
-              && Theme.ContrastRatio("#98939F", "#16161E") > Theme.ContrastRatio("#8A8494", "#16161E"));
+              Theme.ContrastRatio("#F0F4FF", "#121829") > Theme.ContrastRatio("#9FB2D8", "#121829")
+              && Theme.ContrastRatio("#9FB2D8", "#121829") > Theme.ContrastRatio("#889DC2", "#121829"));
 
         // ---- 53b. the band value must express DYNAMICS, not pin at full ----
         // The previous peak-normalised formula read 1.000 for ANY steady signal, so a chorus held

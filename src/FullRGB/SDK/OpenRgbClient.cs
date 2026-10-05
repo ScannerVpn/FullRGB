@@ -164,6 +164,17 @@ public sealed class OpenRgbClient : IDisposable
         if (!changed) return;
         Thread.Sleep(600);
         RefreshControllers(ct);
+        // A resize makes the server rebuild that controller while our reply is being served; a
+        // read that lands in that window comes back torn AND stays torn on this socket (the
+        // stream is shifted). One fresh connection re-syncs — measured necessary and sufficient
+        // on 2026-10-03 (an independent probe stayed poisoned for 40 minutes, the next
+        // connection was byte-perfect).
+        if (Controllers.Any(c => c.ParseFailed))
+        {
+            Disconnect();
+            Connect(_host, _port, _clientName, ct);
+            RefreshControllers(ct);
+        }
     }
 
     /// <summary>Paint absolute LED colors on one controller. rgb length must be 3*ledCount.</summary>
@@ -329,15 +340,28 @@ public sealed class OpenRgbClient : IDisposable
     private (uint type, byte[] payload) ReadPacket(CancellationToken ct)
     {
         var stream = _stream ?? throw new IOException("SDK not connected");
-        var header = ReadExact(stream, 16, ct);
-        if (header[0] != (byte)'O' || header[1] != (byte)'R' || header[2] != (byte)'G' || header[3] != (byte)'B')
-            throw new IOException("Invalid SDK packet magic");
-        uint type = BitConverter.ToUInt32(header, 8);
-        uint size = BitConverter.ToUInt32(header, 12);
-        if (!IsPayloadSizeValid(size))
-            throw new IOException($"SDK payload too large: {size}");
-        var payload = size > 0 ? ReadExact(stream, (int)size, ct) : Array.Empty<byte>();
-        return (type, payload);
+        while (true)
+        {
+            var header = ReadExact(stream, 16, ct);
+            if (header[0] != (byte)'O' || header[1] != (byte)'R' || header[2] != (byte)'G' || header[3] != (byte)'B')
+                throw new IOException("Invalid SDK packet magic");
+            uint type = BitConverter.ToUInt32(header, 8);
+            uint size = BitConverter.ToUInt32(header, 12);
+            if (!IsPayloadSizeValid(size))
+                throw new IOException($"SDK payload too large: {size}");
+            var payload = size > 0 ? ReadExact(stream, (int)size, ct) : Array.Empty<byte>();
+
+            // The server pushes DEVICE_LIST_UPDATED (opcode 100) into EVERY client's stream
+            // whenever its device list changes — once when detection finishes (the app connects
+            // at exactly that moment after every engine start) and after every RESIZE_ZONE (the
+            // app resizes zones on every connect). It is NOT a reply to anything we sent, and
+            // this client used to read it as if it were one: every byte after it was shifted,
+            // each controller parsed to "(partially readable device)", and the whole connection
+            // stayed poisoned until it was torn down. Consume the broadcast and keep waiting for
+            // the actual reply.
+            if (type == Pkt.DEVICE_LIST_UPDATED) continue;
+            return (type, payload);
+        }
     }
 
     public static bool IsPayloadSizeValid(uint size) => size <= MaxPayloadSize;

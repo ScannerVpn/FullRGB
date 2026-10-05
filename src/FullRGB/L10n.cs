@@ -1,4 +1,4 @@
-﻿namespace FullRGB;
+namespace FullRGB;
 
 /// <summary>Tiny key-based localization: en (default) + fa (RTL).</summary>
 public static class L10n
@@ -14,7 +14,7 @@ public static class L10n
             ["page.eyebrow.devices"] = "Your devices",
             ["page.eyebrow.hardware"] = "A look at the system core",
             ["page.eyebrow.settings"] = "Workspace settings",
-            ["page.h1.lighting"] = "Give your system the color of life",
+            ["page.h1.lighting"] = "Lighting & Effects Studio",
             ["page.h1.devices"] = "Your devices",
             ["page.h1.hardware"] = "A look at the system core",
             ["page.h1.settings"] = "Workspace settings",
@@ -448,7 +448,7 @@ public static class L10n
             ["page.eyebrow.devices"] = "همه‌چیز، درست به سلیقهٔ شما.",
             ["page.eyebrow.hardware"] = "یک نگاه به قلب سیستم",
             ["page.eyebrow.settings"] = "تنظیمات فضای کاری",
-            ["page.h1.lighting"] = "به سیستم خود، رنگ زندگی بدهید",
+            ["page.h1.lighting"] = "استودیو نورپردازی و افکت‌ها",
             ["page.h1.devices"] = "دستگاه‌های شما",
             ["page.h1.hardware"] = "یک نگاه به قلب سیستم",
             ["page.h1.settings"] = "تنظیمات فضای کاری",

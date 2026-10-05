@@ -1,115 +1,118 @@
 <Application x:Class="FullRGB.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
 
-    <!-- ══════════════════ palette (arena FullRGB purple-dark) ══════════════════
+    <!-- ══════════════════ palette (Aurora Chroma Prism) ══════════════════
+         Deep midnight navy base with vivid Aurora Borealis spectrum highlights.
          Accent* brushes are MUTATED at runtime (Theme.ApplyAccent) so the user can
          recolour the whole UI; never freeze them and never inline the accent hex. -->
-    <SolidColorBrush x:Key="Bg"          Color="#0E0E13"/>
-    <SolidColorBrush x:Key="BgElevated"  Color="#121217"/>
-    <SolidColorBrush x:Key="Card"        Color="#16161E"/>
-    <SolidColorBrush x:Key="CardHover"   Color="#1B1923"/>
-    <SolidColorBrush x:Key="Surface"     Color="#1B1822"/>
-    <SolidColorBrush x:Key="SurfaceHi"   Color="#221B2C"/>
-    <SolidColorBrush x:Key="Border"      Color="#282831"/>
-    <SolidColorBrush x:Key="BorderSoft"  Color="#25232B"/>
-    <SolidColorBrush x:Key="Text"        Color="#E0D8EE"/>
-    <SolidColorBrush x:Key="Muted"       Color="#98939F"/>
-    <!-- Faint is 10.5px body text, not decoration (device meta lines, hints that carry meaning),
-         so it has to clear WCAG AA 4.5:1 on Card #16161E. The old #6B6575 measured 3.13:1 and
-         failed; #8A8494 measures 4.96:1 and keeps Text > Muted > Faint as a visible hierarchy. -->
-    <SolidColorBrush x:Key="Faint"       Color="#8A8494"/>
-    <SolidColorBrush x:Key="Accent"      Color="#A487EF"/>
-    <SolidColorBrush x:Key="AccentSoft"  Color="#1AA487EF" Opacity="1"/>
-    <SolidColorBrush x:Key="AccentDim"   Color="#281E37"/>
-    <SolidColorBrush x:Key="Violet"      Color="#946CFF"/>
-    <SolidColorBrush x:Key="Pink"        Color="#D2A6F1"/>
-    <SolidColorBrush x:Key="Warn"        Color="#FFC24D"/>
-    <SolidColorBrush x:Key="WarnBg"      Color="#241E12"/>
-    <SolidColorBrush x:Key="Danger"      Color="#FF5C6C"/>
-    <SolidColorBrush x:Key="DangerBg"    Color="#251317"/>
-    <SolidColorBrush x:Key="Ok"          Color="#68D5AF"/>
-    <SolidColorBrush x:Key="OnAccent"    Color="#1A1024"/>
+    <SolidColorBrush x:Key="Bg"          Color="#090C15"/>
+    <SolidColorBrush x:Key="BgElevated"  Color="#0E1322"/>
+    <SolidColorBrush x:Key="Card"        Color="#121829"/>
+    <SolidColorBrush x:Key="CardHover"   Color="#1A2238"/>
+    <SolidColorBrush x:Key="Surface"     Color="#151C30"/>
+    <SolidColorBrush x:Key="SurfaceHi"   Color="#1E2742"/>
+    <SolidColorBrush x:Key="Border"      Color="#222D47"/>
+    <SolidColorBrush x:Key="BorderSoft"  Color="#1A233A"/>
+    <SolidColorBrush x:Key="Text"        Color="#F0F4FF"/>
+    <SolidColorBrush x:Key="Muted"       Color="#9FB2D8"/>
+    <SolidColorBrush x:Key="Faint"       Color="#889DC2"/>
+    <SolidColorBrush x:Key="Accent"      Color="#38BDF8"/>
+    <SolidColorBrush x:Key="AccentSoft"  Color="#2238BDF8" Opacity="1"/>
+    <SolidColorBrush x:Key="AccentDim"   Color="#14223A"/>
+    <SolidColorBrush x:Key="Violet"      Color="#A855F7"/>
+    <SolidColorBrush x:Key="Pink"        Color="#EC4899"/>
+    <SolidColorBrush x:Key="Warn"        Color="#FBBF24"/>
+    <SolidColorBrush x:Key="WarnBg"      Color="#2A2010"/>
+    <SolidColorBrush x:Key="Danger"      Color="#FB5A77"/>
+    <SolidColorBrush x:Key="DangerBg"    Color="#2A1218"/>
+    <SolidColorBrush x:Key="Ok"          Color="#34D399"/>
+    <SolidColorBrush x:Key="OnAccent"    Color="#090C15"/>
 
-    <!-- brand mark fill: arena gradient violet → purple → cyan -->
+    <!-- brand mark fill: vibrant Aurora spectrum Cyan → Indigo/Violet → Rose -->
     <LinearGradientBrush x:Key="BrandMark" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#CF80ED" Offset="0"/>
-      <GradientStop Color="#946CFF" Offset="0.48"/>
-      <GradientStop Color="#72D7E7" Offset="1"/>
+      <GradientStop Color="#22D3EE" Offset="0"/>
+      <GradientStop Color="#818CF8" Offset="0.5"/>
+      <GradientStop Color="#F43F5E" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="BrandGrad" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#A487EF" Offset="0"/>
-      <GradientStop Color="#946CFF" Offset="0.55"/>
-      <GradientStop Color="#72D7E7" Offset="1"/>
+      <GradientStop Color="#38BDF8" Offset="0"/>
+      <GradientStop Color="#A855F7" Offset="0.45"/>
+      <GradientStop Color="#EC4899" Offset="0.8"/>
+      <GradientStop Color="#FBBF24" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="AccentFill" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#8D59E7" Offset="0"/>
-      <GradientStop Color="#A487EF" Offset="1"/>
+      <GradientStop Color="#0284C7" Offset="0"/>
+      <GradientStop Color="#38BDF8" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- window backdrop: soft purple bloom, dark everywhere else -->
-    <RadialGradientBrush x:Key="AppBackdrop" GradientOrigin="0.78,0.02" Center="0.78,0.02"
-                         RadiusX="1.05" RadiusY="0.9">
-      <GradientStop Color="#1A1428" Offset="0"/>
-      <GradientStop Color="#0E0E13" Offset="0.75"/>
+    <!-- window backdrop: atmospheric Aurora Borealis bloom with deep midnight space -->
+    <RadialGradientBrush x:Key="AppBackdrop" GradientOrigin="0.75,0.05" Center="0.75,0.05"
+                         RadiusX="1.1" RadiusY="0.95">
+      <GradientStop Color="#18223D" Offset="0"/>
+      <GradientStop Color="#13182A" Offset="0.38"/>
+      <GradientStop Color="#090C15" Offset="0.82"/>
     </RadialGradientBrush>
 
     <LinearGradientBrush x:Key="CardGrad" StartPoint="0,0" EndPoint="0,1">
-      <GradientStop Color="#18161F" Offset="0"/>
-      <GradientStop Color="#14131B" Offset="1"/>
+      <GradientStop Color="#141A2D" Offset="0"/>
+      <GradientStop Color="#101524" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- lighting hero: arena hero-panel radial + linear -->
+    <!-- lighting hero: luminous aurora glass glow -->
     <LinearGradientBrush x:Key="HeroGrad" StartPoint="0,0" EndPoint="1,0.6">
-      <GradientStop Color="#1C1828" Offset="0"/>
-      <GradientStop Color="#17151F" Offset="0.66"/>
-      <GradientStop Color="#19151F" Offset="1"/>
+      <GradientStop Color="#18233C" Offset="0"/>
+      <GradientStop Color="#12182B" Offset="0.6"/>
+      <GradientStop Color="#14192D" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- active nav fill: soft purple wash -->
+    <!-- active nav fill: luminous cyan/purple aurora wash -->
     <LinearGradientBrush x:Key="NavActiveFill" StartPoint="0,0" EndPoint="1,0">
-      <GradientStop Color="#198D59E7" Offset="0"/>
-      <GradientStop Color="#298D59E7" Offset="1"/>
+      <GradientStop Color="#2538BDF8" Offset="0"/>
+      <GradientStop Color="#35A855F7" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- arena heading-action buttons -->
+    <!-- prism spectrum: rainbow diffraction ring -->
     <LinearGradientBrush x:Key="RingRainbow" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#9470FF" Offset="0"/>
-      <GradientStop Color="#FA66CE" Offset="0.2"/>
-      <GradientStop Color="#FF7D99" Offset="0.4"/>
-      <GradientStop Color="#FFD699" Offset="0.55"/>
-      <GradientStop Color="#98EDC0" Offset="0.7"/>
-      <GradientStop Color="#67D7F2" Offset="0.85"/>
-      <GradientStop Color="#8174FF" Offset="1"/>
+      <GradientStop Color="#38BDF8" Offset="0"/>
+      <GradientStop Color="#818CF8" Offset="0.2"/>
+      <GradientStop Color="#C084FC" Offset="0.38"/>
+      <GradientStop Color="#F472B6" Offset="0.55"/>
+      <GradientStop Color="#FB7185" Offset="0.72"/>
+      <GradientStop Color="#FBBF24" Offset="0.88"/>
+      <GradientStop Color="#34D399" Offset="1"/>
     </LinearGradientBrush>
 
     <Style x:Key="ProfileSelectBtn" TargetType="Button">
-      <Setter Property="Foreground" Value="#B4ADBF"/>
+      <Setter Property="Foreground" Value="#9FB2D8"/>
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Padding" Value="12,8"/>
-      <Setter Property="MinHeight" Value="37"/>
+      <Setter Property="MinHeight" Value="38"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="#1B1922" BorderBrush="#34303E" BorderThickness="1"
-                    CornerRadius="7" Padding="{TemplateBinding Padding}">
+            <Border x:Name="bd" Background="#141D30" BorderBrush="#25375A" BorderThickness="1.2"
+                    CornerRadius="12" Padding="{TemplateBinding Padding}">
               <StackPanel Orientation="Horizontal">
-                <TextBlock Text="&#xE736;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                           Foreground="#AC8DD8" VerticalAlignment="Center"/>
-                <ContentPresenter Margin="8,0,8,0" VerticalAlignment="Center"/>
+                <Border Width="20" Height="20" CornerRadius="10" Background="#2038BDF8" Margin="0,0,8,0">
+                  <TextBlock Text="&#xE736;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="#38BDF8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ContentPresenter VerticalAlignment="Center"/>
                 <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                           Foreground="#787080" VerticalAlignment="Center"/>
+                           Foreground="#889DC2" VerticalAlignment="Center" Margin="8,0,0,0"/>
               </StackPanel>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#272131"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
+                <Setter TargetName="bd" Property="Background" Value="#1C2844"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -118,25 +121,32 @@
     </Style>
 
     <Style x:Key="PowerBtn" TargetType="Button">
-      <Setter Property="Width" Value="38"/>
-      <Setter Property="Height" Value="38"/>
+      <Setter Property="Width" Value="40"/>
+      <Setter Property="Height" Value="40"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="#1E1A23" BorderBrush="#38313E" BorderThickness="1"
-                    CornerRadius="7">
-              <TextBlock x:Name="ico" Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15"
-                         Foreground="#7B7085" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Border x:Name="bd" Background="#141D30" BorderBrush="#25375A" BorderThickness="1.2"
+                    CornerRadius="20">
+              <TextBlock x:Name="ico" Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                         Foreground="#889DC2" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#3E2A51"/>
+                <Setter TargetName="bd" Property="Background" Value="#1C2844"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
+                <Setter TargetName="ico" Property="Foreground" Value="#F0F4FF"/>
               </Trigger>
               <Trigger Property="Tag" Value="on">
-                <Setter TargetName="bd" Property="Background" Value="#55281E35"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#5E5D3F76"/>
-                <Setter TargetName="ico" Property="Foreground" Value="#C39AF5"/>
+                <Setter TargetName="bd" Property="Background" Value="#1A2D48"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
+                <Setter TargetName="bd" Property="Effect">
+                  <Setter.Value>
+                    <DropShadowEffect Color="#38BDF8" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
+                  </Setter.Value>
+                </Setter>
+                <Setter TargetName="ico" Property="Foreground" Value="#38BDF8"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -145,20 +155,20 @@
     </Style>
 
     <Style x:Key="SaveProfileBtnStyle" TargetType="Button">
-      <Setter Property="Foreground" Value="#C9ACEB"/>
+      <Setter Property="Foreground" Value="#38BDF8"/>
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="#1A8D62C4" BorderBrush="#5D427A" BorderThickness="1"
-                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+            <Border x:Name="bd" Background="#1838BDF8" BorderBrush="#2A5075" BorderThickness="1"
+                    CornerRadius="8" Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#2BA473D6"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#A67CD1"/>
+                <Setter TargetName="bd" Property="Background" Value="#3038BDF8"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -216,8 +226,8 @@
       <Setter Property="Background" Value="{StaticResource CardGrad}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="CornerRadius" Value="10"/>
-      <Setter Property="Padding" Value="18,16"/>
+      <Setter Property="CornerRadius" Value="14"/>
+      <Setter Property="Padding" Value="20,18"/>
     </Style>
 
     <!-- ══════════════════ chip (radio) ══════════════════ -->
@@ -232,7 +242,7 @@
           <ControlTemplate TargetType="RadioButton">
             <Border x:Name="bd" Background="{StaticResource Surface}"
                     BorderBrush="{StaticResource Border}" BorderThickness="1"
-                    CornerRadius="10" Padding="11,7" SnapsToDevicePixels="True">
+                    CornerRadius="10" Padding="12,8" SnapsToDevicePixels="True">
               <ContentPresenter VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -252,32 +262,47 @@
       </Setter>
     </Style>
 
-    <!-- effect tile: arena .effect-card — icon art over a label, 4-column grid -->
+    <!-- effect tile: modern studio glass card with glowing active state -->
     <Style x:Key="FxTile" TargetType="RadioButton">
       <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
-      <Setter Property="Margin" Value="0,0,8,8"/>
-      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="0,0,10,10"/>
+      <Setter Property="FontSize" Value="11.5"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="SnapsToDevicePixels" Value="True"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="bd" Background="#1B1822"
-                    BorderBrush="#302B37" BorderThickness="1"
-                    CornerRadius="7" Padding="0" SnapsToDevicePixels="True">
-              <ContentPresenter/>
+            <Border x:Name="outer" CornerRadius="14" SnapsToDevicePixels="True">
+              <Border x:Name="bd" Background="#131B2D"
+                      BorderBrush="#202E4A" BorderThickness="1.2"
+                      CornerRadius="13" Padding="0" SnapsToDevicePixels="True">
+                <ContentPresenter/>
+              </Border>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#221B2C"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#665079"/>
-                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                <Setter TargetName="bd" Property="Background" Value="#1A253E"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#4FB0E8"/>
+                <Setter Property="Foreground" Value="#FFFFFF"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#281E37"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#AD80EE"/>
-                <Setter Property="Foreground" Value="#D4CADA"/>
+                <Setter TargetName="bd" Property="Background">
+                  <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                      <GradientStop Color="#182C4A" Offset="0"/>
+                      <GradientStop Color="#101C32" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Setter.Value>
+                </Setter>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+                <Setter TargetName="outer" Property="Effect">
+                  <Setter.Value>
+                    <DropShadowEffect Color="#38BDF8" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
+                  </Setter.Value>
+                </Setter>
+                <Setter Property="Foreground" Value="#FFFFFF"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -295,19 +320,26 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="bd" Background="#1B1822"
-                    BorderBrush="#2D2835" BorderThickness="1"
-                    CornerRadius="7" Padding="12,10" SnapsToDevicePixels="True">
-              <ContentPresenter VerticalAlignment="Center"/>
+            <Border x:Name="outer" CornerRadius="12">
+              <Border x:Name="bd" Background="#121829"
+                      BorderBrush="#222D47" BorderThickness="1.2"
+                      CornerRadius="12" Padding="14,12" SnapsToDevicePixels="True">
+                <ContentPresenter VerticalAlignment="Center"/>
+              </Border>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#211C2B"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#59456A"/>
+                <Setter TargetName="bd" Property="Background" Value="#1A253E"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#281E37"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#AD80EE"/>
+                <Setter TargetName="bd" Property="Background" Value="#162744"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
+                <Setter TargetName="outer" Property="Effect">
+                  <Setter.Value>
+                    <DropShadowEffect Color="#38BDF8" BlurRadius="10" ShadowDepth="0" Opacity="0.35"/>
+                  </Setter.Value>
+                </Setter>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -335,7 +367,7 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{StaticResource SurfaceHi}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#6B4C8B"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#38BDF8"/>
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{StaticResource Bg}"/>
@@ -813,50 +845,56 @@
       </Setter>
     </Style>
 
-    <!-- ══════════════════ sidebar nav item (arena .nav-item) ══════════════════ -->
+    <!-- ══════════════════ topbar nav item (horizontal studio pill) ══════════════════ -->
     <Style x:Key="NavTab" TargetType="RadioButton">
-      <Setter Property="Foreground" Value="#98939F"/>
-      <Setter Property="FontSize" Value="12"/>
-      <Setter Property="FontWeight" Value="Medium"/>
+      <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+      <Setter Property="Foreground" Value="#9FB2D8"/>
+      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Margin" Value="0,0,0,7"/>
-      <Setter Property="Height" Value="46"/>
-      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="Height" Value="40"/>
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Grid>
-              <Border x:Name="bd" Background="Transparent" CornerRadius="7"
+            <Border x:Name="outer" CornerRadius="10" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+              <Border x:Name="bd" Background="Transparent" CornerRadius="10"
                       BorderThickness="1" BorderBrush="Transparent"
-                      Padding="13,0" SnapsToDevicePixels="True">
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                  </Grid.ColumnDefinitions>
-                  <TextBlock x:Name="ico" Grid.Column="0" Text="{TemplateBinding Tag}"
-                             FontFamily="Segoe MDL2 Assets" FontSize="16"
-                             Foreground="#898591" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                  <ContentPresenter Grid.Column="1" VerticalAlignment="Center"
-                                    HorizontalAlignment="Left"/>
-                </Grid>
+                      Padding="16,0" SnapsToDevicePixels="True"
+                      shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                  <TextBlock x:Name="ico" Text="{TemplateBinding Tag}"
+                             FontFamily="Segoe MDL2 Assets" FontSize="13.5"
+                             Foreground="#7E94B8" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                  <ContentPresenter VerticalAlignment="Center"/>
+                </StackPanel>
               </Border>
-              <!-- accent bar on the physical end edge (left under RTL) -->
-              <Border x:Name="rail" Width="3" Height="24" CornerRadius="2"
-                      Background="Transparent" HorizontalAlignment="Right" Margin="0,0,-1,0"/>
-            </Grid>
+            </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#1B1923"/>
-                <Setter Property="Foreground" Value="#E0D8EE"/>
+                <Setter TargetName="bd" Property="Background" Value="#152033"/>
+                <Setter TargetName="ico" Property="Foreground" Value="#38BDF8"/>
+                <Setter Property="Foreground" Value="#FFFFFF"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{StaticResource NavActiveFill}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="#209B65DD"/>
-                <Setter TargetName="ico" Property="Foreground" Value="#B68EEC"/>
-                <Setter TargetName="rail" Property="Background" Value="#B390F4"/>
-                <Setter Property="Foreground" Value="#C4A7FF"/>
-                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter TargetName="bd" Property="Background">
+                  <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                      <GradientStop Color="#1A2D48" Offset="0"/>
+                      <GradientStop Color="#101C30" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Setter.Value>
+                </Setter>
+                <Setter TargetName="bd" Property="BorderBrush" Value="#4038BDF8"/>
+                <Setter TargetName="ico" Property="Foreground" Value="#38BDF8"/>
+                <Setter TargetName="outer" Property="Effect">
+                  <Setter.Value>
+                    <DropShadowEffect Color="#38BDF8" BlurRadius="10" ShadowDepth="0" Opacity="0.4"/>
+                  </Setter.Value>
+                </Setter>
+                <Setter Property="Foreground" Value="#FFFFFF"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>

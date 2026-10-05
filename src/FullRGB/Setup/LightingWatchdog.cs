@@ -120,13 +120,14 @@ public sealed class LightingWatchdog : IDisposable
             else _probesSinceGrowth++;
             _lastLedTotal = snap.LedTotal;
 
-            bool moved = EngineShadow.AnyMotion(before, snap, stats.AnimatedDeviceNames());
+            var animated = stats.AnimatedDeviceNames();
+            bool moved = EngineShadow.AnyMotion(before, snap, animated);
             bool expectMotion = stats.EngineRunning && stats.EffectsRunning;
             if (moved) { _strikes = 0; try { MotionDetected?.Invoke(); } catch { } }
             else if (expectMotion) _strikes++;
 
             var verdict = EngineShadow.Decide(snap, before, expectMotion, stats.SecondsSinceSession,
-                                              _strikes, _probesSinceGrowth);
+                                              _strikes, _probesSinceGrowth, animated.Count);
 
             if (verdict == EngineShadow.Verdict.Wait && expectMotion && _strikes >= 1)
                 verdict = EngineShadow.Verdict.Ok;   // one strike: keep watching, say nothing

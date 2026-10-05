@@ -153,7 +153,7 @@ public sealed class AppSettings
     public bool StartMinimized { get; set; }
 
     /// <summary>UI accent colour (hex). Also used for the brand ring and the toggles.</summary>
-    public string AccentHex { get; set; } = "#A487EF";
+    public string AccentHex { get; set; } = "#38BDF8";
 
     /// <summary>Restore the last effect and start painting as soon as the app launches.</summary>
     public bool AutoStartEffects { get; set; } = true;
@@ -283,7 +283,7 @@ public sealed class AppSettings
             ActiveProfile = Profiles[0].Name;
         if (Language != "fa") Language = "en";
         if (ServerPort is < 1 or > 65535) ServerPort = 6742;
-        if (!IsHexColor(AccentHex)) AccentHex = "#A487EF";
+        if (!IsHexColor(AccentHex)) AccentHex = "#38BDF8";
         if (double.IsNaN(SchedulerMinutes) || SchedulerMinutes < 1) SchedulerMinutes = 1;
         if (SchedulerMinutes > 180) SchedulerMinutes = 180;
         ForegroundMap ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

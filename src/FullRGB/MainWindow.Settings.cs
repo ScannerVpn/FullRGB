@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -100,6 +100,35 @@ public partial class MainWindow
         });
     }
 
+    /// <summary>True when the machine itself booted within the last few minutes, i.e. this session
+    /// is the first one after a boot (pure; --rendertest §42). Environment.TickCount64 counts from
+    /// system start and keeps counting across sleep/hibernate, so a wake from an older boot never
+    /// qualifies — wakes have their own recovery path.</summary>
+    internal static bool IsFirstSessionAfterBoot(long tickCountMs, int graceMinutes = 15)
+        => tickCountMs < (long)graceMinutes * 60_000;
+
+    /// <summary>
+    /// The boot counterpart of <see cref="ScheduleAutoRescanIfNeeded"/>: that one only fires when
+    /// the device COUNT is short of the cache, but the user's remaining complaint was sessions
+    /// where all controllers answered and something was still half-initialized — the standing
+    /// manual fix was "press Rescan once after boot". Do exactly that automatically on the first
+    /// session after a boot, ~12 s after the window is up: late enough that the engine's own
+    /// detection has finished, cheap enough not to care when nothing is wrong (a rescan re-reads
+    /// the list, re-expands and re-applies the running effect).
+    /// </summary>
+    private async Task RunBootRescanIfFirstSessionAsync()
+    {
+        try
+        {
+            if (!IsFirstSessionAfterBoot(Environment.TickCount64)) return;
+            await Task.Delay(TimeSpan.FromSeconds(12));
+            if (_reallyExiting || _osShuttingDown || _resuming || _rescanning) return;
+            Diag.AppLog.Info("first session after boot: automatic rescan");
+            await RescanAsync();
+        }
+        catch { /* a failed boot rescan leaves the watchdog and the manual button as the net */ }
+    }
+
     /// <summary>The delayed wake-up rescan body (method group, not an async lambda: an async
     /// lambda converted to Action is async void and the compiler nags CS4014 at the call site).
     /// A repair or the user's own rescan owns the session: theirs already re-detects, and a
@@ -162,7 +191,13 @@ public partial class MainWindow
         _loadingUi = true;
         ProfileCmb.ItemsSource = App.Settings.Profiles.Select(p => p.Name).ToList();
         ProfileCmb.SelectedItem = CurrentProfile().Name;
-        AutostartChk.IsChecked = App.Settings.StartWithWindows;
+        bool autostartActive = App.Settings.StartWithWindows || Autostart.IsRegistered();
+        if (autostartActive && !App.Settings.StartWithWindows)
+        {
+            App.Settings.StartWithWindows = true;
+            ProfileStore.Save(App.Settings);
+        }
+        AutostartChk.IsChecked = autostartActive;
         MinimizedChk.IsChecked = App.Settings.StartMinimized;
         AutoFxChk.IsChecked = App.Settings.AutoStartEffects;
         CloseEngineChk.IsChecked = App.Settings.CloseEngineOnExit;
@@ -915,6 +950,38 @@ Unregister-ScheduledTask -TaskName '{TaskName}' -Confirm:$false
 exit 0
 ";
 
+    private const string RunRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string RunValueName = "FullRGB";
+
+    public static string? RegisteredRunKeyCommand()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunRegistryKey, false);
+            return key?.GetValue(RunValueName) as string;
+        }
+        catch { return null; }
+    }
+
+    private static void SetRunRegistryKey(bool enable, string exePath, string args)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunRegistryKey, true);
+            if (key is null) return;
+            if (enable)
+            {
+                string cmd = string.IsNullOrWhiteSpace(args) ? $"\"{exePath}\"" : $"\"{exePath}\" {args.Trim()}";
+                key.SetValue(RunValueName, cmd);
+            }
+            else
+            {
+                key.DeleteValue(RunValueName, false);
+            }
+        }
+        catch { }
+    }
+
     public static bool Set(bool enable, string args) => Set(enable, args, out _);
 
     public static bool Set(bool enable, string args, out string error)
@@ -924,13 +991,17 @@ exit 0
         {
             var exe = Environment.ProcessPath;
             if (exe is null) { error = "no process path"; return false; }
+            SetRunRegistryKey(enable, exe, args);
             string script = enable ? BuildRegisterScript(exe, args) : BuildUnregisterScript();
             if (RunScript(script, false, out error)) return true;
             // A task left behind with RunLevel=HighestAvailable cannot be touched without
             // elevation ("Access is denied") — repair it once, elevated; the replacement is
             // LeastPrivilege so this never recurs.
             if (error.Contains("denied", StringComparison.OrdinalIgnoreCase) && !SDK.Elevation.IsElevated)
-                return Setup.EngineTask.RunElevatedScript(script, out error);
+            {
+                if (Setup.EngineTask.RunElevatedScript(script, out error)) return true;
+            }
+            if (enable && RegisteredRunKeyCommand() is not null) { error = ""; return true; }
             return false;
         }
         catch (Exception e) { error = e.Message; return false; }
@@ -984,11 +1055,24 @@ exit 0
         }
     }
 
-    /// <summary>Exe path the logon task will actually run, or null when it does not exist.</summary>
+    /// <summary>True when either the logon task or HKCU Run registry value exists.</summary>
+    public static bool IsRegistered() => QueryXml() is not null || RegisteredRunKeyCommand() is not null;
+
+    /// <summary>Exe path the logon task or registry run entry will actually run, or null when neither exists.</summary>
     public static string? RegisteredExePath()
     {
         var xml = QueryXml();
-        return xml is null ? null : Setup.EngineTask.ParseCommand(xml);
+        var taskExe = xml is null ? null : Setup.EngineTask.ParseCommand(xml);
+        if (taskExe is not null) return taskExe;
+        var reg = RegisteredRunKeyCommand();
+        if (string.IsNullOrWhiteSpace(reg)) return null;
+        if (reg.StartsWith('"'))
+        {
+            int q2 = reg.IndexOf('"', 1);
+            return q2 > 1 ? reg[1..q2] : reg[1..];
+        }
+        int sp = reg.IndexOf(' ');
+        return sp > 0 ? reg[..sp] : reg;
     }
 
     /// <summary>True when the logon task exists AND points at this installation's exe.</summary>
@@ -1004,7 +1088,7 @@ exit 0
     public static bool EnsureCurrent(string args) => EnsureCurrent(args, out _);
 
     /// <summary>
-    /// Rewrites the logon task to this exe when it is missing or points at an old folder.
+    /// Rewrites the logon task and registry run key to this exe when missing or pointing at an old folder.
     /// The task stores an ABSOLUTE path, so every move to a new dist folder silently broke
     /// autostart (the task kept launching a deleted exe → 0x80070002) until the user
     /// toggled the setting off and on. Own-user task: no UAC needed.
@@ -1014,6 +1098,8 @@ exit 0
         error = "";
         try
         {
+            var exe = Environment.ProcessPath;
+            if (exe is not null) SetRunRegistryKey(true, exe, args);
             if (MatchesCurrent()) return true;
             return Set(true, args, out error);
         }

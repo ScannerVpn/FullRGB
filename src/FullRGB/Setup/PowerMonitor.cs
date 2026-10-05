@@ -138,7 +138,7 @@ public sealed class PowerMonitor : IDisposable
                     {
                         LastEvent = "session:" + ev;
                         SessionChanged?.Invoke(ev);
-                        if (ev is SessionEvent.Logoff or SessionEvent.ConsoleDisconnect) SessionEnding?.Invoke();
+                        if (ev is SessionEvent.Logoff) SessionEnding?.Invoke();
                     }
                     return IntPtr.Zero;
 

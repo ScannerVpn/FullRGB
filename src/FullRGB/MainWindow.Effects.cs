@@ -108,9 +108,8 @@ public partial class MainWindow
             var col = new StackPanel();
             col.Children.Add(BuildEffectArt(icon.T));
 
-            // Name row: localised name over the English one (only when they differ), with the
-            // arena's round check badge on the selected tile and its icon on the rest.
-            var label = new Grid { Margin = new Thickness(10, 0, 10, 10) };
+            // Name row: localised name over the English one, with the Aurora check badge on selected tile
+            var label = new Grid { Margin = new Thickness(12, 4, 12, 12) };
             label.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             label.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -118,17 +117,18 @@ public partial class MainWindow
             names.Children.Add(new TextBlock
             {
                 Text = L10n.T(icon.Key),
-                FontSize = 10.5,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = (Brush)FindResource("Text"),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
-            // The English line only earns its place when the current language is not English.
             string english = L10n.T(icon.Key, "en");
             if (english != L10n.T(icon.Key))
                 names.Children.Add(new TextBlock
                 {
                     Text = english,
-                    FontSize = 8,
-                    Foreground = (Brush)FindResource("Faint"),
+                    FontSize = 8.5,
+                    Foreground = (Brush)FindResource("Muted"),
                     Margin = new Thickness(0, 2, 0, 0),
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 });
@@ -140,16 +140,18 @@ public partial class MainWindow
             {
                 mark.Children.Add(new Border
                 {
-                    Width = 16,
-                    Height = 16,
-                    CornerRadius = new CornerRadius(8),
-                    Background = new SolidColorBrush(Color.FromRgb(0xBC, 0x95, 0xF3)),
+                    Width = 18,
+                    Height = 18,
+                    CornerRadius = new CornerRadius(9),
+                    Background = new SolidColorBrush(Color.FromRgb(0x38, 0xBD, 0xF8)),
+                    Effect = Glow(0x38BDF8, 8, 0.6),
                     Child = new TextBlock
                     {
                         Text = "\uE73E",
                         FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                        FontSize = 9,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x22, 0x15, 0x2F)),
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x09, 0x0C, 0x15)),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                     },
@@ -157,7 +159,7 @@ public partial class MainWindow
             }
             else
             {
-                mark.Children.Add(FxIconVisual(icon, 13));
+                mark.Children.Add(FxIconVisual(icon, 14));
             }
             Grid.SetColumn(mark, 1);
             label.Children.Add(mark);
@@ -266,31 +268,29 @@ public partial class MainWindow
 
     private readonly record struct StripSpec(double Height, Brush Fill, Color Glow, double GlowOpacity);
 
-    /// <summary>Per-effect strip colours, copied from the arena art-* rules.</summary>
+    /// <summary>Per-effect strip colours: Aurora Chroma Prism vibrant spectrum.</summary>
     private static StripSpec StripFor(EffectType t) => t switch
     {
-        EffectType.Solid => new StripSpec(6, Solid(0xB881F5), Rgb(0x9E65F1), 0.50),
-        EffectType.Breathing => new StripSpec(5, Grad(Rgb(0x744292), Rgb(0xDFB2FF), Rgb(0x8A53A9)), Rgb(0xA469DF), 0.46),
-        EffectType.Wave => new StripSpec(6, Grad(Rgb(0x683897), Rgb(0xB58CEF), Rgb(0x6899F0), Rgb(0x2D637C)), Rgb(0x727BFF), 0.39),
-        EffectType.Gradient => new StripSpec(6, Grad(Rgb(0x755BE4), Rgb(0xA282F4), Rgb(0xD78CD4), Rgb(0xF3A1C8)), Rgb(0xD88DFF), 0.53),
-        EffectType.ColorCycle => new StripSpec(6, Grad(Rgb(0xAD7FFC), Rgb(0xD59EED), Rgb(0xAC81F7), Rgb(0x8189EB)), Rgb(0xAD7FFF), 0.50),
-        EffectType.Temperature => new StripSpec(6, Grad(Rgb(0x51C4F3), Rgb(0x68CDC8), Rgb(0x70D5B6), Rgb(0xDBBA61), Rgb(0xEC7C69)), Rgb(0x6BBEA8), 0.33),
-        EffectType.Blink => new StripSpec(6, BlinkBrush(), Rgb(0xA178EB), 0.39),
-        // Rainbow plus everything the reference leaves on the default palette.
-        _ => new StripSpec(6, Grad(Rgb(0xE86674), Rgb(0xEDC670), Rgb(0x70D7BB), Rgb(0x69BCF4), Rgb(0xB682ED)), Rgb(0xA969FB), 0.40),
+        EffectType.Solid => new StripSpec(8, Solid(0x38BDF8), Rgb(0x38BDF8), 0.65),
+        EffectType.Breathing => new StripSpec(8, Grad(Rgb(0x0369A1), Rgb(0x38BDF8), Rgb(0x7DD3FC), Rgb(0x0369A1)), Rgb(0x38BDF8), 0.55),
+        EffectType.Wave => new StripSpec(8, Grad(Rgb(0x0284C7), Rgb(0x38BDF8), Rgb(0x818CF8), Rgb(0xC084FC)), Rgb(0x38BDF8), 0.60),
+        EffectType.Gradient => new StripSpec(8, Grad(Rgb(0x38BDF8), Rgb(0x818CF8), Rgb(0xC084FC), Rgb(0xF472B6)), Rgb(0x818CF8), 0.60),
+        EffectType.ColorCycle => new StripSpec(8, Grad(Rgb(0x38BDF8), Rgb(0x34D399), Rgb(0xFBBF24), Rgb(0xFB7185), Rgb(0xA855F7)), Rgb(0x34D399), 0.55),
+        EffectType.Temperature => new StripSpec(8, Grad(Rgb(0x38BDF8), Rgb(0x2DD4BF), Rgb(0x34D399), Rgb(0xFBBF24), Rgb(0xEF4444)), Rgb(0x2DD4BF), 0.55),
+        EffectType.Blink => new StripSpec(8, BlinkBrush(), Rgb(0x38BDF8), 0.60),
+        // Rainbow plus default palette:
+        _ => new StripSpec(8, Grad(Rgb(0x38BDF8), Rgb(0x34D399), Rgb(0xFBBF24), Rgb(0xFB7185), Rgb(0xA855F7), Rgb(0x6366F1)), Rgb(0x38BDF8), 0.65),
     };
 
     /// <summary>Blink's repeating gradient: ~7px lit, then ~9px dark, tiled along the strip.</summary>
     private static Brush BlinkBrush()
     {
         const double period = 16;
-        // Built by hand rather than through Grad(): the stops need custom offsets, and Grad()
-        // hands back a frozen brush that cannot be touched afterwards.
         var brush = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
-        brush.GradientStops.Add(new GradientStop(Rgb(0xCBC0FF), 0));
-        brush.GradientStops.Add(new GradientStop(Rgb(0xBEB0FF), 6 / period));
-        brush.GradientStops.Add(new GradientStop(Rgb(0x372647), 7 / period));
-        brush.GradientStops.Add(new GradientStop(Rgb(0x372647), 1));
+        brush.GradientStops.Add(new GradientStop(Rgb(0x38BDF8), 0));
+        brush.GradientStops.Add(new GradientStop(Rgb(0x7DD3FC), 6 / period));
+        brush.GradientStops.Add(new GradientStop(Rgb(0x0B1324), 7 / period));
+        brush.GradientStops.Add(new GradientStop(Rgb(0x0B1324), 1));
         brush.Freeze();
         return new DrawingBrush
         {
@@ -310,17 +310,19 @@ public partial class MainWindow
     {
         (int hex, byte alpha) = t switch
         {
-            EffectType.Fire => (0x7B3124, (byte)0x1F),
-            EffectType.AudioVU => (0x6641A9, (byte)0x25),
-            EffectType.Custom => (0x8253B9, (byte)0x29),
-            _ => (0x7041A7, (byte)0x25),
+            EffectType.Fire => (0xEA580C, (byte)0x30),
+            EffectType.AudioVU or EffectType.Spectrum => (0x0284C7, (byte)0x30),
+            EffectType.Custom => (0x38BDF8, (byte)0x2E),
+            EffectType.Rainbow or EffectType.Plasma => (0x38BDF8, (byte)0x2E),
+            EffectType.Wave or EffectType.Breathing => (0x0284C7, (byte)0x2E),
+            _ => (0x38BDF8, (byte)0x22),
         };
         var c = Rgb(hex);
         var b = new RadialGradientBrush
         {
             GradientOrigin = new Point(0.5, 0.5),
             Center = new Point(0.5, 0.5),
-            RadiusX = 0.75,
+            RadiusX = 0.8,
             RadiusY = 0.95,
         };
         b.GradientStops.Add(new GradientStop(Color.FromArgb(alpha, c.R, c.G, c.B), 0));
@@ -335,7 +337,7 @@ public partial class MainWindow
         var host = new Border
         {
             Height = ArtHeight,
-            ClipToBounds = true,          // the tilted strips are meant to run off the tile edge
+            ClipToBounds = true,
             Background = ArtTint(t),
             Child = canvas,
         };
@@ -347,10 +349,10 @@ public partial class MainWindow
                 Text = "\uE9E9",          // equaliser: Custom has no strip, it is a set of sliders
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 FontSize = 27,
-                Foreground = Solid(0xB995E8),
+                Foreground = Solid(0x38BDF8),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Effect = Glow(0xC49BF6, 8, 0.27),
+                Effect = Glow(0x38BDF8, 10, 0.50),
             });
             return host;
         }
@@ -358,15 +360,14 @@ public partial class MainWindow
         if (t == EffectType.Fire) { canvas.Children.Add(EmberBar()); return host; }
         if (t == EffectType.Comet) { canvas.Children.Add(CometStreak()); return host; }
         if (t == EffectType.Spectrum) { canvas.Children.Add(SpectrumBars()); return host; }
-        if (t == EffectType.Scanner) { canvas.Children.Add(SegmentStrip(ScannerCells(), Rgb(0xAD80EE), 0.35)); return host; }
-        if (t == EffectType.Sparkle) { canvas.Children.Add(SegmentStrip(SparkleCells(), Rgb(0xC9A9F5), 0.40)); return host; }
-        if (t == EffectType.Ambient) { canvas.Children.Add(SegmentStrip(AmbientCells(), Rgb(0x9F7FE0), 0.35)); return host; }
-        if (t == EffectType.Gaming) { canvas.Children.Add(SegmentStrip(GamingCells(), Rgb(0xE8E3F2), 0.30)); return host; }
+        if (t == EffectType.Scanner) { canvas.Children.Add(SegmentStrip(ScannerCells(), Rgb(0x38BDF8), 0.55)); return host; }
+        if (t == EffectType.Sparkle) { canvas.Children.Add(SegmentStrip(SparkleCells(), Rgb(0x38BDF8), 0.55)); return host; }
+        if (t == EffectType.Ambient) { canvas.Children.Add(SegmentStrip(AmbientCells(), Rgb(0x38BDF8), 0.50)); return host; }
+        if (t == EffectType.Gaming) { canvas.Children.Add(SegmentStrip(GamingCells(), Rgb(0x38BDF8), 0.45)); return host; }
         if (t == EffectType.Plasma)
         {
-            // same palette as Rainbow, but smeared: plasma is a soft blend rather than discrete LEDs
             var spec = StripFor(EffectType.Rainbow);
-            var soft = new Grid { Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 5 } };
+            var soft = new Grid { Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 6 } };
             soft.Children.Add(LedStrip(spec.Height, spec.Fill, spec.Glow, spec.GlowOpacity));
             canvas.Children.Add(soft);
             return host;
@@ -384,19 +385,18 @@ public partial class MainWindow
             Height = height,
             Margin = new Thickness(14, 0, 14, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            RenderTransform = new RotateTransform(-10),
         };
 
-        var bar = new Border { Background = fill, CornerRadius = new CornerRadius(4) };
-        bar.Effect = Glow(glow, 14, glowOpacity);
+        var bar = new Border { Background = fill, CornerRadius = new CornerRadius(height / 2.0) };
+        bar.Effect = Glow(glow, 16, glowOpacity);
         group.Children.Add(bar);
 
-        // 16 LED cells over the gradient — the separators are what make it read as hardware.
+        // 16 LED cells over the gradient
         var cells = new UniformGrid { Columns = 16 };
-        var sep = new SolidColorBrush(Color.FromArgb(0x99, 0x16, 0x12, 0x1A));
+        var sep = new SolidColorBrush(Color.FromArgb(0x88, 0x09, 0x0C, 0x15));
         sep.Freeze();
         for (int i = 0; i < 16; i++)
-            cells.Children.Add(new Border { BorderBrush = sep, BorderThickness = new Thickness(0, 0, 2, 0) });
+            cells.Children.Add(new Border { BorderBrush = sep, BorderThickness = new Thickness(0, 0, 1.5, 0) });
         group.Children.Add(cells);
 
         // specular line just under the top edge
@@ -404,37 +404,34 @@ public partial class MainWindow
         {
             Height = 2,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 1, 0, 0),
-            Fill = Grad(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x7A, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF)),
+            Margin = new Thickness(2, 0.5, 2, 0),
+            Fill = Grad(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF)),
         });
         return group;
     }
 
     /// <summary>
-    /// A dark strip whose individual LEDs are lit from <paramref name="lit"/> (16 slots, null =
-    /// unlit). Scanner, Sparkle, Ambient and Gaming all read as "some cells lit", which a plain
-    /// gradient cannot express.
+    /// A dark strip whose individual LEDs are lit from <paramref name="lit"/> (16 slots, null = unlit).
     /// </summary>
     private static FrameworkElement SegmentStrip(Color?[] lit, Color glow, double opacity)
     {
         var group = new Grid
         {
-            Height = 6,
+            Height = 8,
             Margin = new Thickness(14, 0, 14, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            RenderTransform = new RotateTransform(-10),
         };
 
-        var bar = new Border { Background = Solid(0x2A2333), CornerRadius = new CornerRadius(4) };
-        bar.Effect = Glow(glow, 12, opacity);
+        var bar = new Border { Background = Solid(0x18243C), CornerRadius = new CornerRadius(4) };
+        bar.Effect = Glow(glow, 14, opacity);
         group.Children.Add(bar);
 
-        var sep = new SolidColorBrush(Color.FromArgb(0x99, 0x16, 0x12, 0x1A));
+        var sep = new SolidColorBrush(Color.FromArgb(0x88, 0x09, 0x0C, 0x15));
         sep.Freeze();
         var cells = new UniformGrid { Columns = 16 };
         for (int i = 0; i < 16; i++)
         {
-            var cell = new Border { BorderBrush = sep, BorderThickness = new Thickness(0, 0, 2, 0) };
+            var cell = new Border { BorderBrush = sep, BorderThickness = new Thickness(0, 0, 1.5, 0) };
             if (i < lit.Length && lit[i] is { } c)
                 cell.Background = new SolidColorBrush(c);
             cells.Children.Add(cell);
@@ -445,8 +442,8 @@ public partial class MainWindow
         {
             Height = 2,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 1, 0, 0),
-            Fill = Grad(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x5A, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF)),
+            Margin = new Thickness(2, 0.5, 2, 0),
+            Fill = Grad(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF)),
         });
         return group;
     }
@@ -455,9 +452,9 @@ public partial class MainWindow
     private static Color?[] ScannerCells()
     {
         var c = new Color?[16];
-        c[4] = Color.FromArgb(0x55, 0xAD, 0x80, 0xEE);
-        c[5] = Rgb(0xD9C2FF);
-        c[6] = Color.FromArgb(0x66, 0xAD, 0x80, 0xEE);
+        c[5] = Color.FromArgb(0x66, 0x38, 0xBD, 0xF8);
+        c[6] = Rgb(0x38BDF8);
+        c[7] = Color.FromArgb(0x66, 0x38, 0xBD, 0xF8);
         return c;
     }
 
@@ -465,10 +462,10 @@ public partial class MainWindow
     private static Color?[] SparkleCells()
     {
         var c = new Color?[16];
-        c[2] = Rgb(0xEFE4FF);
-        c[6] = Color.FromArgb(0x88, 0xC9, 0xA9, 0xF5);
-        c[11] = Rgb(0xEFE4FF);
-        c[14] = Color.FromArgb(0x66, 0xC9, 0xA9, 0xF5);
+        c[2] = Rgb(0xF0F9FF);
+        c[5] = Color.FromArgb(0x99, 0x38, 0xBD, 0xF8);
+        c[10] = Rgb(0xF0F9FF);
+        c[14] = Color.FromArgb(0x88, 0xA8, 0x55, 0xF7);
         return c;
     }
 
@@ -498,31 +495,30 @@ public partial class MainWindow
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            RenderTransform = new RotateTransform(-10),
         };
         for (int i = 0; i < 9; i++)
         {
             row.Children.Add(new Border
             {
                 Width = 6,
-                Height = 6 + 24 * i / 8.0,
-                CornerRadius = new CornerRadius(2),
-                Margin = new Thickness(2, 0, 2, 0),
+                Height = 6 + 26 * i / 8.0,
+                CornerRadius = new CornerRadius(2.5),
+                Margin = new Thickness(2.5, 0, 2.5, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Background = Grad(Rgb(0xC597FC), Rgb(0x825ABA)),
-                Effect = Glow(0x9F71E5, 6, 0.25),
+                Background = Grad(Rgb(0x38BDF8), Rgb(0x818CF8), Rgb(0xC084FC)),
+                Effect = Glow(0x38BDF8, 8, 0.45),
             });
         }
         return row;
     }
 
     private static FrameworkElement VuBars()
-    {        var row = new StackPanel
+    {
+        var row = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            RenderTransform = new RotateTransform(-7),
         };
         int[] heights = { 25, 44, 63, 37, 78, 54, 89, 62, 36, 65, 47, 24 };
         foreach (var h in heights)
@@ -530,12 +526,12 @@ public partial class MainWindow
             var bar = new Border
             {
                 Width = 4,
-                Height = Math.Max(4, 31 * h / 100.0),
+                Height = Math.Max(4, 32 * h / 100.0),
                 CornerRadius = new CornerRadius(2),
                 Margin = new Thickness(2, 0, 2, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Background = Grad(Rgb(0xC597FC), Rgb(0x825ABA)),
-                Effect = Glow(0x9F71E5, 7, 0.30),
+                Background = Grad(Rgb(0x34D399), Rgb(0x38BDF8), Rgb(0xFBBF24)),
+                Effect = Glow(0x38BDF8, 8, 0.50),
             };
             row.Children.Add(bar);
         }
@@ -546,16 +542,14 @@ public partial class MainWindow
     {
         var bar = new Border
         {
-            Height = 7,
-            Margin = new Thickness(26, 0, 26, 0),
+            Height = 8,
+            Margin = new Thickness(24, 0, 24, 0),
             VerticalAlignment = VerticalAlignment.Center,
             CornerRadius = new CornerRadius(4),
-            Background = Grad(Rgb(0xBD2227), Rgb(0xF27E34), Rgb(0xF0B15B), Rgb(0xEF732D), Rgb(0xD93B25)),
-            RenderTransform = new RotateTransform(-10),
-            // the CSS throws a warm halo upward off the bar
+            Background = Grad(Rgb(0xDC2626), Rgb(0xEA580C), Rgb(0xF97316), Rgb(0xFBBF24)),
             Effect = new DropShadowEffect
             {
-                Color = Rgb(0xFA752A), BlurRadius = 15, ShadowDepth = 5, Direction = 270, Opacity = 0.45,
+                Color = Rgb(0xF97316), BlurRadius = 16, ShadowDepth = 0, Opacity = 0.65,
             },
         };
         return bar;
@@ -565,30 +559,29 @@ public partial class MainWindow
     {
         var group = new Grid
         {
-            Height = 5,
-            Margin = new Thickness(28, 0, 28, 0),
+            Height = 7,
+            Margin = new Thickness(24, 0, 24, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            RenderTransform = new RotateTransform(-10),
         };
         var streak = new Border
         {
-            CornerRadius = new CornerRadius(2.5),
+            CornerRadius = new CornerRadius(3.5),
             Background = Grad(
-                Color.FromArgb(0x00, 0x5C, 0x54, 0x89),
-                Color.FromArgb(0x22, 0x5C, 0x54, 0x89),
-                Color.FromArgb(0x88, 0xA7, 0x84, 0xEF),
-                Rgb(0xECDBFF)),
-            Effect = Glow(0xB980F9, 6, 0.55),
+                Color.FromArgb(0x00, 0x02, 0x84, 0xC7),
+                Color.FromArgb(0x44, 0x02, 0x84, 0xC7),
+                Color.FromArgb(0xAA, 0x38, 0xBD, 0xF8),
+                Rgb(0xF0F9FF)),
+            Effect = Glow(0x38BDF8, 10, 0.70),
         };
         group.Children.Add(streak);
         group.Children.Add(new Ellipse
         {
-            Width = 5,
-            Height = 5,
+            Width = 7,
+            Height = 7,
             Fill = Brushes.White,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
-            Effect = Glow(0xAD72FF, 9, 0.80),
+            Effect = Glow(0x38BDF8, 12, 0.90),
         });
         return group;
     }
@@ -1125,15 +1118,24 @@ public partial class MainWindow
     {
         var swatch = new Border
         {
-            Width = 54, Height = 22, CornerRadius = new CornerRadius(7),
+            Width = 46, Height = 22, CornerRadius = new CornerRadius(7),
             Background = new SolidColorBrush(Theme.Parse(hex, Color.FromRgb(0, 229, 255))),
-            BorderBrush = (Brush)FindResource("Border"),
-            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(180, 56, 189, 248)),
+            BorderThickness = new Thickness(1.2),
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius = 10,
+                ShadowDepth = 0,
+                Color = Theme.Parse(hex, Color.FromRgb(56, 189, 248)),
+                Opacity = 0.55
+            }
         };
         var label = new TextBlock
         {
             Text = hex.ToUpperInvariant(),
-            Style = (Style)FindResource("FaintTxt"),
+            Style = (Style)FindResource("MutedTxt"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(9, 0, 0, 0),
         };
@@ -1156,7 +1158,10 @@ public partial class MainWindow
             if (picked is null) return;
             current = picked;
             set(picked);
-            swatch.Background = new SolidColorBrush(Theme.Parse(picked, Color.FromRgb(0, 229, 255)));
+            var parsedCol = Theme.Parse(picked, Color.FromRgb(0, 229, 255));
+            swatch.Background = new SolidColorBrush(parsedCol);
+            if (swatch.Effect is System.Windows.Media.Effects.DropShadowEffect ds)
+                ds.Color = parsedCol;
             label.Text = picked.ToUpperInvariant();
             PushEdit();
         };
@@ -1196,19 +1201,32 @@ public partial class MainWindow
             Style = (Style)FindResource("Slider"),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        var readout = new TextBlock
+        var readoutTxt = new TextBlock
         {
-            Style = (Style)FindResource("FaintTxt"),
+            Style = (Style)FindResource("MutedTxt"),
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
             VerticalAlignment = VerticalAlignment.Center,
-            MinWidth = 38,
-            TextAlignment = TextAlignment.Right,
-            Margin = new Thickness(10, 0, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
             Text = format?.Invoke() ?? $"{sl.Value * 100:F0}%",
+        };
+        var readoutBadge = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(200, 19, 30, 51)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(160, 36, 54, 86)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(6, 2, 6, 2),
+            MinWidth = 44,
+            Margin = new Thickness(10, 0, 0, 0),
+            Child = readoutTxt,
         };
         sl.ValueChanged += (_, _) =>
         {
             set(sl.Value);
-            readout.Text = format?.Invoke() ?? $"{sl.Value * 100:F0}%";
+            readoutTxt.Text = format?.Invoke() ?? $"{sl.Value * 100:F0}%";
             PushEdit();
         };
 
@@ -1216,8 +1234,8 @@ public partial class MainWindow
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         g.Children.Add(sl);
-        Grid.SetColumn(readout, 1);
-        g.Children.Add(readout);
+        Grid.SetColumn(readoutBadge, 1);
+        g.Children.Add(readoutBadge);
 
         AddRow(label, g);
     }
